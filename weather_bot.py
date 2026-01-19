@@ -26,7 +26,6 @@ def get_data():
     return res, mag
 
 def main():
-    # Настройка времени для Пинска (UTC+3)
     now = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=3)
     hour = now.hour
     weather, mag = get_data()
@@ -36,45 +35,40 @@ def main():
     w_info = (f"Т: {curr['temperature_2m']}°C, Вл: {curr['relative_humidity_2m']}%, "
               f"Ветер: {curr['wind_speed_10m']}км/ч ({get_wind_dir(curr['wind_direction_10m'])})")
 
-    # Логика формирования задания для ИИ
     if hour == 6:
-        task = (f"Данные: {w_info}. День: от {day['temperature_2m_min'][0]} до {day['temperature_2m_max'][0]}°C. "
-                f"Осадки: {day['precipitation_probability_max'][0]}%. Световой день: {day['sunrise'][0][-5:]}-{day['sunset'][0][-5:]}. "
-                f"Бури: {mag}. Напиши строгий утренний обзор и дай совет по одежде.")
+        task = (f"Данные: {w_info}. День: {day['temperature_2m_min'][0]}..{day['temperature_2m_max'][0]}°C. "
+                f"Осадки: {day['precipitation_probability_max'][0]}%. Солнце: {day['sunrise'][0][-5:]}-{day['sunset'][0][-5:]}. "
+                f"Бури: {mag}. Сделай утренний обзор и дай совет по одежде.")
     elif hour >= 20:
-        task = (f"Данные: {w_info}. Прогноз на ночь: {weather['hourly']['temperature_2m'][27]}°C, "
-                f"осадки ночью: {weather['hourly']['precipitation_probability'][27]}%. "
-                f"Завтра: {day['temperature_2m_max'][1]}°C. Подведи итог дня и дай прогноз на ночь.")
+        task = (f"Данные: {w_info}. Ночь: {weather['hourly']['temperature_2m'][27]}°C. "
+                f"Завтра: {day['temperature_2m_max'][1]}°C. Подведи итог дня.")
     else:
         task = (f"Данные: {w_info}. Осадки ближайшие 2ч: {weather['hourly']['precipitation_probability'][1]}%. "
-                f"Напиши текущую ситуацию кратко.")
+                f"Краткая сводка ситуации.")
 
-    # Актуальный список работающих бесплатных моделей
+    # САМЫЙ АКТУАЛЬНЫЙ СПИСОК БЕСПЛАТНЫХ МОДЕЛЕЙ
     models = [
-        "google/gemma-2-9b-it:free",
-        "qwen/qwen-2.5-7b-instruct:free",
-        "mistralai/mistral-7b-instruct:free",
-        "meta-llama/llama-3.1-8b-instruct:free",
-        "meta-llama/llama-3.2-3b-instruct:free"
+        "google/gemini-2.0-flash-exp:free",
+        "meta-llama/llama-3.3-70b-instruct:free",
+        "deepseek/deepseek-chat:free",
+        "qwen/qwen-2.5-72b-instruct:free",
+        "mistralai/mistral-7b-instruct:free"
     ]
 
     api_key = os.getenv('OPENROUTER_API_KEY')
-    system_prompt = (
-        "Ты — информационный бот Пинск.Инфо. Стиль: строгий, деловой монолог. "
-        "Используй эмодзи: 🌡, 💨, 🌅, 🌇, ☂️, 🧲. Пиши только по делу, без приветствий."
-    )
+    system_prompt = "Ты Пинск.Инфо. Стиль: строгий, деловой. Используй эмодзи: 🌡, 💨, 🌅, 🌇, ☂️, 🧲."
 
     final_text = ""
-    # Попытка запроса к каждой модели из списка
     for model in models:
         try:
-            print(f"Попытка запроса к модели: {model}...")
+            print(f"Запрос к {model}...")
             response = requests.post(
                 "https://openrouter.ai/api/v1/chat/completions",
                 headers={
                     "Authorization": f"Bearer {api_key}",
-                    "HTTP-Referer": "https://github.com/weather_al", # Обязательно для OpenRouter
-                    "X-Title": "Pinsk Weather Bot"
+                    "HTTP-Referer": "https://github.com/weather_al",
+                    "X-Title": "Pinsk Weather Bot",
+                    "Content-Type": "application/json"
                 },
                 json={
                     "model": model,
@@ -82,36 +76,29 @@ def main():
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": task}
                     ]
-                }, timeout=25)
+                }, timeout=30)
 
             if response.status_code == 200:
                 result = response.json()
-                if 'choices' in result and len(result['choices']) > 0:
+                if 'choices' in result:
                     final_text = result['choices'][0]['message']['content']
-                    print(f"Успешно получено от {model}")
+                    print(f"Успех с моделью {model}!")
                     break
             else:
-                print(f"Модель {model} ответила ошибкой {response.status_code}: {response.text}")
+                print(f"Ошибка {model}: {response.status_code} - {response.text}")
         except Exception as e:
-            print(f"Не удалось связаться с {model}: {e}")
+            print(f"Сбой {model}: {e}")
             continue
 
-    # Если ни одна модель не ответила, отправляем "сырые" данные (чтобы канал не пустовал)
     if not final_text:
-        print("Критическая ошибка: ни одна модель ИИ не ответила.")
-        final_text = (
-            f"📍 **Пинск: Текущая сводка**\n\n"
-            f"🌡 Температура: {curr['temperature_2m']}°C\n"
-            f"💨 Ветер: {curr['wind_speed_10m']} км/ч\n"
-            f"💧 Влажность: {curr['relative_humidity_2m']}%\n"
-            f"⚠️ Сервис аналитики временно недоступен, приведены сухие данные."
-        )
+        final_text = (f"🌡 **Пинск: {curr['temperature_2m']}°C**\n"
+                      f"💨 Ветер: {curr['wind_speed_10m']} км/ч\n"
+                      f"💧 Влажность: {curr['relative_humidity_2m']}%\n"
+                      f"🧲 Бури: {mag}\n\n"
+                      "⚠️ Аналитика временно недоступна (OpenRouter Busy).")
 
-    # Отправка в Telegram
-    token = os.getenv('TELEGRAM_TOKEN')
-    chat_id = os.getenv('CHANNEL_ID')
-    requests.get(f"https://api.telegram.org/bot{token}/sendMessage",
-                 params={'chat_id': chat_id, 'text': final_text, 'parse_mode': 'Markdown'})
+    requests.get(f"https://api.telegram.org/bot{os.getenv('TELEGRAM_TOKEN')}/sendMessage",
+                 params={'chat_id': os.getenv('CHANNEL_ID'), 'text': final_text, 'parse_mode': 'Markdown'})
 
 if __name__ == "__main__":
     main()
