@@ -3,10 +3,13 @@ import os
 import requests
 import datetime
 
+import os, requests, datetime
+
 def get_wind_dir(deg):
     return ['С', 'СВ', 'В', 'ЮВ', 'Ю', 'ЮЗ', 'З', 'СЗ'][int((deg + 22.5) // 45) % 8]
 
 def get_data():
+    print("--- 📡 Шаг 1: Сбор метеоданных ---")
     url = ("https://api.open-meteo.com/v1/forecast?latitude=52.12&longitude=26.10"
            "&current=temperature_2m,relative_humidity_2m,wind_speed_10m,wind_direction_10m"
            "&hourly=temperature_2m,precipitation_probability"
@@ -16,8 +19,9 @@ def get_data():
     try:
         kp = requests.get("https://services.swpc.noaa.gov/products/noaa-scales.json").json()
         idx = int(kp['0'].get('rescale_value', 0))
-        mag = "спокойный" if idx < 4 else "неспокойный" if idx == 4 else "магнитная буря!"
+        mag = "спокойный" if idx < 4 else "неспокойный" if idx == 4 else "буря!"
     except: mag = "нет данных"
+    print(f"Данные получены успешно. Магнитный фон: {mag}")
     return res, mag
 
 def main():
@@ -26,7 +30,6 @@ def main():
     weather, mag = get_data()
     curr, day = weather['current'], weather['daily']
 
-    # Расширенные данные для ИИ
     w_info = (f"Т: {curr['temperature_2m']}°C, Вл: {curr['relative_humidity_2m']}%, "
               f"Ветер: {curr['wind_speed_10m']}км/ч ({get_wind_dir(curr['wind_direction_10m'])})")
 
@@ -40,9 +43,11 @@ def main():
                 f"Ночь: {weather['hourly']['temperature_2m'][27]}°C. "
                 f"Завтра: {day['temperature_2m_max'][1]}°C. Подведи итоги дня, пожелай спокойной ночи.")
     else:
-        task = f"Сводка в течение дня. {w_info}. Осадки в ближайшие 2ч: {weather['hourly']['precipitation_probability'][1]}%. Коротко о текущих изменениях."
+        task = f"Сводка дня. {w_info}. Осадки ближайшие 2ч: {weather['hourly']['precipitation_probability'][1]}%. Коротко о текущих изменениях."
 
-    # Оставляем только те модели, которые работают стабильно
+    print("--- 🤖 Шаг 2: Работа ИИ-агента ---")
+    print(f"Отправляем промпт: {task}")
+
     models = [
         "meta-llama/llama-3.3-70b-instruct:free",
         "google/gemini-2.0-flash-exp:free",
@@ -51,13 +56,12 @@ def main():
 
     api_key = os.getenv('OPENROUTER_API_KEY')
     final_text = ""
-
-    # Системная установка: просим писать содержательно, но без воды
-    system_msg = ("Ты автор канала Пинск.Инфо. Пиши содержательно, используй много тематических эмодзи. "
+    system_msg = ("Ты автор канала Пинск.Инфо. Пиши содержательно, используй тематические эмодзи. "
                   "Текст должен быть уютным, но деловым. Структурируй по пунктам.")
 
     for model in models:
         try:
+            print(f"Запрос к модели: {model}...")
             response = requests.post(
                 "https://openrouter.ai/api/v1/chat/completions",
                 headers={
@@ -71,17 +75,38 @@ def main():
                         {"role": "system", "content": system_msg},
                         {"role": "user", "content": task}
                     ]
-                }, timeout=30)
+                }, timeout=35)
+
             if response.status_code == 200:
                 final_text = response.json()['choices'][0]['message']['content']
+                print(f"✅ Успешный ответ от {model}!")
+                print(f"Текст от ИИ: {final_text[:100]}...") # Логируем начало текста
                 break
-        except: continue
+            else:
+                print(f"⚠️ Модель {model} отклонила запрос: {response.status_code} - {response.text}")
+        except Exception as e:
+            print(f"❌ Ошибка соединения с {model}: {e}")
+            continue
 
     if not final_text:
+        print("🚨 Все ИИ-агенты недоступны. Используем резервный шаблон.")
         final_text = f"🌡 Пинск сегодня: {curr['temperature_2m']}°C\n💨 Ветер: {curr['wind_speed_10m']}км/ч\n🧲 Фон: {mag}"
 
-    requests.get(f"https://api.telegram.org/bot{os.getenv('TELEGRAM_TOKEN')}/sendMessage",
-                 params={'chat_id': os.getenv('CHANNEL_ID'), 'text': final_text, 'parse_mode': 'Markdown'})
+    print("--- 📲 Шаг 3: Отправка в Telegram ---")
+    token = os.getenv('TELEGRAM_TOKEN')
+    chat_id = os.getenv('CHANNEL_ID')
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+
+    payload = {'chat_id': chat_id, 'text': final_text, 'parse_mode': 'Markdown'}
+    resp = requests.post(url, json=payload)
+
+    if resp.status_code == 200:
+        print("🚀 ГОТОВО: Сообщение в канале!")
+    else:
+        print(f"❌ ОШИБКА TELEGRAM: {resp.status_code} - {resp.text}")
+        # Вторая попытка без Markdown на случай ошибок в символах
+        payload.pop('parse_mode')
+        requests.post(url, json=payload)
 
 if __name__ == "__main__":
     main()
