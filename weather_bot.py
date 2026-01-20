@@ -6,105 +6,94 @@ def get_wind_dir(deg):
     return ['С', 'СВ', 'В', 'ЮВ', 'Ю', 'ЮЗ', 'З', 'СЗ'][int((deg + 22.5) // 45) % 8]
 
 def get_data():
-    # Исправленный URL: явно указываем daily параметры
+    # Добавили давление (surface_pressure) для анализа циклонов
     url = (
         "https://api.open-meteo.com/v1/forecast?latitude=52.12&longitude=26.10"
-        "&current=temperature_2m,relative_humidity_2m,apparent_temperature,precipitation,wind_speed_10m,wind_direction_10m"
-        "&hourly=temperature_2m,precipitation_probability"
+        "&current=temperature_2m,relative_humidity_2m,apparent_temperature,surface_pressure,precipitation,wind_speed_10m,wind_direction_10m"
+        "&hourly=temperature_2m,precipitation_probability,cloud_cover"
         "&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max"
-        "&timezone=auto&models=icon_seamless,ecmwf_ifs"
+        "&timezone=auto&models=icon_seamless"
     )
     res = requests.get(url).json()
     try:
         kp_res = requests.get("https://services.swpc.noaa.gov/products/noaa-scales.json", timeout=10).json()
         idx = int(kp_res['0'].get('rescale_value', 0))
-        mag = f"{idx} (спокойный)" if idx < 4 else f"{idx} (неспокойный)" if idx == 4 else f"{idx} (буря! ⚠️)"
+        mag = f"{idx} (спокойный)" if idx < 4 else f"{idx} (буря! ⚠️)"
     except: mag = "нет данных"
     return res, mag
 
 def main():
     now = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=3)
-    hour = now.hour
+    hour, weekday = now.hour, now.weekday() # 6 - это воскресенье
     weather, mag = get_data()
 
-    # Защита от ошибок в данных
     curr = weather.get('current', {})
     day = weather.get('daily', {})
-    hourly = weather.get('hourly', {})
 
-    # Безопасное извлечение значений (с дефолтными данными, если API подведёт)
     temp = curr.get('temperature_2m', 'н/д')
-    app_temp = curr.get('apparent_temperature', 'н/д')
-    hum = curr.get('relative_humidity_2m', 'н/д')
-    wind_speed = curr.get('wind_speed_10m', 0)
-    wind_dir = get_wind_dir(curr.get('wind_direction_10m', 0))
-    wind = f"{wind_speed} км/ч ({wind_dir})"
+    press = curr.get('surface_pressure', 760)
 
-    # Температуры на завтра (индекс [1] — это следующий день)
-    try:
-        tomorrow_min = day['temperature_2m_min'][1]
-        tomorrow_max = day['temperature_2m_max'][1]
-        tomorrow_precip = day['precipitation_probability_max'][1]
-    except (KeyError, IndexError):
-        tomorrow_min, tomorrow_max, tomorrow_precip = "н/д", "н/д", 0
+    # 1. ДЕЖУРКА (Днем)
+    if 9 <= hour <= 19:
+        msg = (f"#прогнозпогоды\n\n📍 **ОПЕРАТИВНАЯ СВОДКА ПИНСК**\n\n"
+               f"🌡️ Температура: {temp}°C\n"
+               f"💨 Ветер: {curr.get('wind_speed_10m')} км/ч\n"
+               f"🧲 Магнитный фон: {mag}\n\n"
+               f"📊 Источник: ICON-BY")
 
-    try:
-        night_temp = hourly['temperature_2m'][27] # 03:00 следующего дня
-    except (KeyError, IndexError):
-        night_temp = "н/д"
-
-    # --- Далее логика отправки (Дежурка или ИИ) остается прежней ---
-
-    if 7 <= hour <= 19:
-        final_text = (
-            f"#прогнозпогоды\n\n"
-            f"📍 **ОПЕРАТИВНАЯ СВОДКА ПИНСК**\n\n"
-            f"🌡️ Температура: {temp}°C (ощущается как {app_temp}°C)\n"
-            f"💧 Влажность: {hum}%\n"
-            f"💨 Ветер: {wind}\n"
-            f"🧲 Магнитный фон: {mag}\n\n"
-            f"📊 Источник: ICON-BY & ECMWF"
-        )
+    # 2. АНАЛИТИЧЕСКИЙ ПРОГНОЗ (Утро/Вечер)
     else:
-        # Промпт для ИИ (Блоки 2, 3 и 4)
-        task = (
-            f"Напиши 3 коротких блока текста для метеоновости в Пинске.\n"
-            f"Данные: Сейчас {temp}°C, Ночью {night_temp}°C, Завтра {tomorrow_min}..{tomorrow_max}°C.\n\n"
-            f"Заполни:\n"
-            f"БЛОК_1 (Итоги дня): 2 предложения о погоде сегодня.\n"
-            f"БЛОК_2 (На ночь): прогноз, упомяни {night_temp}°C.\n"
-            f"БЛОК_3 (На завтра): фраза о погоде завтра.\n\n"
-            f"Пиши БЕЗ заголовков, только текст через '---'."
+        # Собираем контекст для синоптика
+        is_sunday_evening = (weekday == 6 and hour >= 20)
+
+        # Данные на неделю для воскресенья
+        week_summary = ""
+        if is_sunday_evening:
+            week_summary = "ПРОГНОЗ НА НЕДЕЛЮ: " + ", ".join([f"{day['temperature_2m_max'][i]}°C" for i in range(1, 7)])
+
+        prompt = (
+            f"Ты — ведущий синоптик Пинск.Инфо. Сделай краткую профессиональную аналитику.\n"
+            f"ДАННЫЕ: Температура {temp}°C, Давление {press} гПа (норма 1013), Ветер {curr.get('wind_speed_10m')} км/ч.\n"
+            f"{week_summary}\n"
+            f"ЗАДАЧА: Объясни ситуацию (антициклон/циклон, влияние на Пинск). Говори профессионально, но понятно. "
+            f"Используй 2-3 предложения. В конце добавь совет дня. Включи эмодзи 🛰️, 🌡️."
         )
 
-        # Код обращения к OpenRouter (оставляем твой текущий список моделей)
-        ai_parts = ["День прошел морозно.", f"Ночью будет около {night_temp}°C.", "Завтра погода существенно не изменится."]
+        ai_analysis = "Атмосферное давление в норме, погода стабильна."
+        try:
+            response = requests.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers={"Authorization": f"Bearer {os.getenv('OPENROUTER_API_KEY')}"},
+                json={
+                    "model": "google/gemini-2.0-flash-001",
+                    "messages": [{"role": "system", "content": "Ты профессиональный метеоролог аналитик."}, {"role": "user", "content": prompt}],
+                    "temperature": 0.7
+                }, timeout=40)
+            if response.status_code == 200:
+                ai_analysis = response.json()['choices'][0]['message']['content'].strip()
+        except: pass
 
-        # ... (здесь твой блок requests.post к OpenRouter) ...
-        # После получения ответа:
-        # ai_parts = [p.strip() for p in raw_text.split('---')]
+        title = "🛰️ АНАЛИТИЧЕСКИЙ ОБЗОР" if not is_sunday_evening else "📅 ГЛАВНЫЙ ПРОГНОЗ НЕДЕЛИ"
 
-        final_text = (
+        msg = (
+            f"© MY NEWS ©\n"
             f"#прогнозпогоды\n\n"
-            f"**1. Текущие данные:**\n"
-            f"🌡️ Температура: {temp}°C (ощущается {app_temp}°C)\n"
-            f"💧 Влажность: {hum}%\n"
-            f"💨 Ветер: {wind}\n"
+            f"**{title}**\n\n"
+            f"**1. Текущие показатели:**\n"
+            f"🌡️ Температура: {temp}°C (ощущается {curr.get('apparent_temperature')}°C)\n"
+            f"💨 Ветер: {curr.get('wind_speed_10m')} км/ч\n"
             f"🧲 Магнитный фон: {mag}\n\n"
-            f"**2. Итоги дня:**\n"
-            f"{ai_parts[0]}\n\n"
-            f"**3. Прогноз на ночь:**\n"
-            f"{ai_parts[1]}\n\n"
-            f"**4. Прогноз на завтра:**\n"
-            f"🌡️ Температура: от {tomorrow_min} до {tomorrow_max}°C\n"
-            f"☔ Осадки: {tomorrow_precip}%\n"
-            f"{ai_parts[2]}\n\n"
+            f"**2. Аналитика синоптика:**\n"
+            f"{ai_analysis}\n\n"
+            f"**3. Завтра в Пинске:**\n"
+            f"🌡️ от {day['temperature_2m_min'][1]}° до {day['temperature_2m_max'][1]}°C\n"
+            f"☔ Осадки: {day['precipitation_probability_max'][1]}%\n\n"
             f"Источник: ICON-BY & ECMWF"
         )
 
-    # Отправка в Telegram
+    # Отправка
     url = f"https://api.telegram.org/bot{os.getenv('TELEGRAM_TOKEN')}/sendMessage"
-    requests.post(url, json={'chat_id': os.getenv('CHANNEL_ID'), 'text': final_text, 'parse_mode': 'Markdown'})
+    requests.post(url, json={'chat_id': os.getenv('CHANNEL_ID'), 'text': msg, 'parse_mode': 'Markdown'})
 
 if __name__ == "__main__":
     main()
