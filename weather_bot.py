@@ -27,39 +27,34 @@ def main():
     weather, mag = get_data()
     curr, day = weather['current'], weather['daily']
 
-    # 1. ТЕКСТ ДЛЯ ДЕЖУРКИ (БЕЗ ИИ)
     if 7 <= hour <= 19:
+        # Дежурка (автоматическая)
         final_text = (
             f"#прогнозпогоды\n\n"
             f"📍 **ОПЕРАТИВНАЯ СВОДКА ПИНСК**\n\n"
-            f"🌡️ Температура: {curr['temperature_2m']}°C\n"
-            f"🧤 Ощущается как: {curr['apparent_temperature']}°C\n"
-            f"💧 Влажность: {curr['relative_humidity_2m']}%\n"
-            f"💨 Ветер: {curr['wind_speed_10m']} км/ч ({get_wind_dir(curr['wind_direction_10m'])})\n"
-            f"☔ Осадки: {curr['precipitation']} мм\n"
-            f"🧲 Магнитный фон: {mag}\n\n"
+            f"- 🌡️ Температура: {curr['temperature_2m']}°C\n"
+            f"- 🧤 Ощущается как: {curr['apparent_temperature']}°C\n"
+            f"- 💧 Влажность: {curr['relative_humidity_2m']}%\n"
+            f"- 💨 Ветер: {curr['wind_speed_10m']} км/ч ({get_wind_dir(curr['wind_direction_10m'])})\n"
+            f"- 🧲 Магнитный фон: {mag}\n\n"
             f"📊 Источник: ECMWF & ICON"
         )
-
-    # 2. ТЕКСТ ДЛЯ БОЛЬШОГО ПРОГНОЗА (С ИИ)
     else:
-        w_info = (
-            f"Температура: {curr['temperature_2m']}°C (ощущается как {curr['apparent_temperature']}°C). "
-            f"Влажность: {curr['relative_humidity_2m']}%. "
-            f"Ветер: {curr['wind_speed_10m']} км/ч ({get_wind_dir(curr['wind_direction_10m'])}). "
-            f"Магнитный фон: {mag}."
-        )
-
-        # Данные на завтра для ИИ
-        tomorrow_min = day['temperature_2m_min'][1]
-        tomorrow_max = day['temperature_2m_max'][1]
+        # Большой прогноз (ИИ)
+        tomorrow_min, tomorrow_max = day['temperature_2m_min'][1], day['temperature_2m_max'][1]
 
         task = (
-            f"Напиши сообщение строго по образцу для данных: {w_info}. "
-            f"Завтра: от {tomorrow_min}°C до {tomorrow_max}°C. Осадки: {day['precipitation_probability_max'][1]}%.\n\n"
-            f"ОБРАЗЕЦ:\n#прогнозпогоды\n\n**1. Текущие данные:**\n- 🌡️ Температура: ...\n- 💧 Влажность: ...\n"
-            f"- 💨 Ветер: ...\n- 🧲 Магнитный фон: ...\n\n**2. Итоги дня:**\n- ...\n\n"
-            f"**3. Прогноз на ночь:**\n- ...\n\n**4. Прогноз на завтра:**\n- 🌡️ Температура: от {tomorrow_min} до {tomorrow_max}°C\n- ...\n\n"
+            f"Напиши сообщение СТРОГО по шаблону. Никаких приветствий. Никаких прочерков.\n"
+            f"ДАННЫЕ: Температура {curr['temperature_2m']}°C (ощущается как {curr['apparent_temperature']}°C), "
+            f"Влажность {curr['relative_humidity_2m']}%, Ветер {curr['wind_speed_10m']} км/ч, Магнитный фон {mag}.\n"
+            f"ЗАВТРА: от {tomorrow_min}°C до {tomorrow_max}°C. Осадки: {day['precipitation_probability_max'][1]}%.\n\n"
+            f"ШАБЛОН (заполни все пункты текстом):\n"
+            f"#прогнозпогоды\n\n"
+            f"1. Текущие данные:\n- 🌡️ Температура: {curr['temperature_2m']}°C (ощущается {curr['apparent_temperature']}°C)\n"
+            f"- 💧 Влажность: {curr['relative_humidity_2m']}%\n- 💨 Ветер: {curr['wind_speed_10m']} км/ч\n- 🧲 Магнитный фон: {mag}\n\n"
+            f"2. Итоги дня:\n(напиши 2-3 предложения о погоде сегодня)\n\n"
+            f"3. Прогноз на ночь:\n(напиши прогноз, укажи температуру около {weather['hourly']['temperature_2m'][27]}°C)\n\n"
+            f"4. Прогноз на завтра:\n- 🌡️ Температура: от {tomorrow_min} до {tomorrow_max}°C\n- ☔ Осадки: {day['precipitation_probability_max'][1]}%\n\n"
             f"Источник: ECMWF & ICON (DWD)"
         )
 
@@ -67,17 +62,14 @@ def main():
         api_key = os.getenv('OPENROUTER_API_KEY')
         final_text = ""
 
-        system_msg = (
-            "Ты — метеоролог Пинск.Инфо. Пиши строго по формату. Не добавляй никаких приветствий или лишних фраз. "
-            "Каждый пункт списка должен начинаться с эмодзи. В блоке 'Прогноз на завтра' обязательно используй цифры температур."
-        )
+        system_msg = "Ты — бот-метеоролог Пинска. Твоя задача — копировать шаблон и заполнять его данными без пропусков. Запрещено использовать приветствия и прочерки."
 
         for model in models:
             try:
                 response = requests.post(
                     "https://openrouter.ai/api/v1/chat/completions",
                     headers={"Authorization": f"Bearer {api_key}", "HTTP-Referer": "https://github.com/weather_al"},
-                    json={"model": model, "messages": [{"role": "system", "content": system_msg}, {"role": "user", "content": task}], "temperature": 0.2},
+                    json={"model": model, "messages": [{"role": "system", "content": system_msg}, {"role": "user", "content": task}], "temperature": 0.1},
                     timeout=60
                 )
                 if response.status_code == 200:
@@ -88,7 +80,7 @@ def main():
         if not final_text:
             final_text = f"#прогнозпогоды\n\n🌡️ Пинск: {curr['temperature_2m']}°C."
 
-    # ОТПРАВКА
+    # Отправка
     token, chat_id = os.getenv('TELEGRAM_TOKEN'), os.getenv('CHANNEL_ID')
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     payload = {'chat_id': chat_id, 'text': final_text, 'parse_mode': 'Markdown'}
