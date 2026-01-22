@@ -122,22 +122,39 @@ def main():
         prev = history.get('day_temp', 'неизвестно')
         ai_prompt = f"Ты метеоролог.Сравни вечер ({cur['temperature_2m']}°C) с днем ({prev}°C) в Пинске. Объясни изменения (прогрев, облака, ветер,давление и т.д ,магнитный фон если нужно) и как изменилась температура. Кратко одним предложением.Если нет каких-то данных просто сообщи.Пиши сразу по существу, без вводных фраз и заголовков"
 
-    # 4. ИИ Анализ (OpenRouter)
-    print(f"Запуск ИИ-агента с промптом: {ai_prompt[:50]}...")
-    try:
-        ai_res = requests.post(
-            "https://openrouter.ai/api/v1/chat/completions",
-            headers={"Authorization": f"Bearer {os.getenv('OPENROUTER_API_KEY')}"},
-            json={"model": "google/gemini-2.0-flash-001", "messages": [{"role": "user", "content": ai_prompt}]},
-            timeout=25
-        ).json()
-        ai_text = ai_res['choices'][0]['message']['content']
-        # Исправление ошибки парсинга Telegram: убираем символы разметки из ответа ИИ
-        ai_text = ai_text.replace('*', '').replace('_', '').replace('`', '')
-        msg += f"\n\n{ai_text}"
-        print("ИИ-анализ успешно получен.")
-    except Exception as e:
-        print(f"Ошибка ИИ-агента: {e}")
+    # 4. ИИ Анализ (OpenRouter) с Fallback системой
+    models = [
+        "google/gemini-2.0-flash-001",
+        "google/gemini-2.0-flash-lite-preview-02-05:free",
+        "qwen/qwen-2.5-7b-instruct:free"
+    ]
+
+    ai_text = ""
+    for model in models:
+        print(f"Попытка запроса к ИИ (модель: {model})...")
+        try:
+            ai_res = requests.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {os.getenv('OPENROUTER_API_KEY')}",
+                    "HTTP-Referer": "https://github.com/weather_al"
+                },
+                json={"model": model, "messages": [{"role": "user", "content": ai_prompt}]},
+                timeout=60
+            )
+
+            if ai_res.status_code == 200:
+                res_json = ai_res.json()
+                if 'choices' in res_json:
+                    ai_text = res_json['choices'][0]['message']['content']
+                    ai_text = ai_text.replace('*', '').replace('_', '').replace('`', '')
+                    msg += f"\n\n{ai_text}"
+                    print(f"ИИ-анализ успешно получен от {model}.")
+                    break
+            else:
+                print(f"Модель {model} вернула ошибку {ai_res.status_code}. Пробую следующую...")
+        except Exception as e:
+            print(f"Ошибка при обращении к {model}: {e}. Пробую следующую...")
 
     # 5. Финализация
     with open(history_file, 'w') as f: json.dump(history, f)
@@ -147,10 +164,9 @@ def main():
     if tg_res.status_code == 200:
         print("Сообщение успешно отправлено.")
     else:
-        # Если Markdown все равно ломается, пробуем отправить чистым текстом
         requests.post(f"https://api.telegram.org/bot{os.getenv('TELEGRAM_TOKEN')}/sendMessage",
                       json={"chat_id": os.getenv('CHANNEL_ID'), "text": msg})
-        print(f"Ошибка Markdown, отправлено обычным текстом: {tg_res.text}")
+        print(f"Ошибка Markdown, отправлено обычным текстом.")
 
 if __name__ == "__main__":
     main()
