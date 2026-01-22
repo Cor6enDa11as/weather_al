@@ -123,6 +123,7 @@ def main():
         ai_prompt = f"Сравни вечер ({cur['temperature_2m']}°C) с днем ({prev}°C) в Пинске. Объясни физику изменений (прогрев, облака, ветер,давление и т.д ,магнитный фон если нужно) и как изменилась температура. Кратко."
 
     # 4. ИИ Анализ (OpenRouter)
+    print(f"Запуск ИИ-агента с промптом: {ai_prompt[:50]}...")
     try:
         ai_res = requests.post(
             "https://openrouter.ai/api/v1/chat/completions",
@@ -132,13 +133,19 @@ def main():
         ).json()
         ai_text = ai_res['choices'][0]['message']['content']
         msg += f"\n---\n👨‍🔬 **АНАЛИЗ:**\n{ai_text}"
-    except:
-        pass
+        print("ИИ-анализ успешно получен.")
+    except Exception as e:
+        print(f"Ошибка ИИ-агента: {e}")
 
     # 5. Финализация
     with open(history_file, 'w') as f: json.dump(history, f)
-    requests.post(f"https://api.telegram.org/bot{os.getenv('TELEGRAM_TOKEN')}/sendMessage",
+    print("Отправка сообщения в Telegram...")
+    tg_res = requests.post(f"https://api.telegram.org/bot{os.getenv('TELEGRAM_TOKEN')}/sendMessage",
                   json={"chat_id": os.getenv('CHANNEL_ID'), "text": msg, "parse_mode": "Markdown"})
+    if tg_res.status_code == 200:
+        print("Сообщение успешно отправлено.")
+    else:
+        print(f"Ошибка отправки: {tg_res.text}")
 
 if __name__ == "__main__":
     main()
