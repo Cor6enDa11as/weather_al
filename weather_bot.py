@@ -132,6 +132,8 @@ def main():
             timeout=25
         ).json()
         ai_text = ai_res['choices'][0]['message']['content']
+        # Исправление ошибки парсинга Telegram: убираем символы разметки из ответа ИИ
+        ai_text = ai_text.replace('*', '').replace('_', '').replace('`', '')
         msg += f"\n---\n👨‍🔬 **АНАЛИЗ:**\n{ai_text}"
         print("ИИ-анализ успешно получен.")
     except Exception as e:
@@ -145,7 +147,10 @@ def main():
     if tg_res.status_code == 200:
         print("Сообщение успешно отправлено.")
     else:
-        print(f"Ошибка отправки: {tg_res.text}")
+        # Если Markdown все равно ломается, пробуем отправить чистым текстом
+        requests.post(f"https://api.telegram.org/bot{os.getenv('TELEGRAM_TOKEN')}/sendMessage",
+                      json={"chat_id": os.getenv('CHANNEL_ID'), "text": msg})
+        print(f"Ошибка Markdown, отправлено обычным текстом: {tg_res.text}")
 
 if __name__ == "__main__":
     main()
