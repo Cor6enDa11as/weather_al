@@ -161,7 +161,7 @@ def main():
 
     # 2. ИИ Анализ
     print("Шаг 2: ИИ анализ...")
-    models = ["google/gemini-2.0-flash-001", "google/gemini-2.0-flash-lite-001", "mistralai/mistral-7b-instruct:free"]
+    models = ["google/gemini-2.0-flash-lite-preview-02-05:free", "google/gemini-2.0-flash-lite-001", "mistralai/mistral-7b-instruct:free", "google/gemini-2.0-flash-001"]
     for model in models:
         try:
             res = requests.post("https://openrouter.ai/api/v1/chat/completions",
