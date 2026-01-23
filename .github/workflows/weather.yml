@@ -1,50 +1,42 @@
-name: Pinsk Weather Bot
+name: Weather Bot CI
 
 on:
   schedule:
-    # Время в UTC (МСК -3 часа)
-    - cron: '0 2 * * *'   # 05:00 МСК
-    - cron: '0 11 * * *'  # 14:00 МСК
-    - cron: '0 17 * * *'  # 20:00 МСК
-  workflow_dispatch:      # Кнопка для ручного запуска
+    - cron: '0 2,11,17 * * *' # Запуски в 05:00, 14:00, 20:00 по МСК (UTC+3)
+  workflow_dispatch:
 
 jobs:
-  run-bot:
+  build:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v4
         with:
-          python-version: '3.10'
-
-      # 📥 Пытаемся достать историю погоды из кэша
-      - name: Restore weather history
-        uses: actions/cache/restore@v4
-        with:
-          path: weather_history.json
-          key: weather-history-${{ github.run_id }}
-          restore-keys: |
-            weather-history-
+          python-version: '3.9'
 
       - name: Install dependencies
         run: pip install requests
 
-      # 🚀 Запуск скрипта с твоими секретами
-      - name: Run Weather Bot
+      - name: Download history
+        uses: actions/download-artifact@v4
+        with:
+          name: weather-history
+          path: .
+        continue-on-error: true
+
+      - name: Run bot
+        run: python weather_bot.py
         env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           CHANNEL_ID: ${{ secrets.CHANNEL_ID }}
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-        run: python weather_bot.py
 
-      # 📤 Сохраняем обновленную историю в кэш для следующего раза
-      - name: Save weather history
-        if: always()
-        uses: actions/cache/save@v4
+      - name: Save history
+        uses: actions/upload-artifact@v4
         with:
+          name: weather-history
           path: weather_history.json
-          key: weather-history-${{ github.run_id }}
+          retention-days: 1
