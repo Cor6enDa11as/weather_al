@@ -1,7 +1,5 @@
 #!/usr/bin/env python3
 
-#!/usr/bin/env python3
-
 import os, requests, datetime, json
 
 # --- Настройки ---
@@ -44,12 +42,15 @@ def get_uv_desc(uv):
     return f"{uv} (высокий!) 👒"
 
 def get_precipitation_info(hourly_data, start_hour):
-    """Ищет ближайшие осадки и формирует строку: тип, сила, время"""
+    """Ищет ближайшие осадки + подробные логи"""
+    print(f"--- Лог осадков: поиск с {start_hour}:00 на 12ч вперед ---")
     for i in range(start_hour, start_hour + 12):
         if i < len(hourly_data['precipitation']):
             prec_sum = hourly_data['precipitation'][i]
+            code = hourly_data['weather_code'][i]
+            if prec_sum > 0:
+                print(f"Час {i%24:02d}:00 -> {prec_sum} мм, код {code}")
             if prec_sum > 0.1:
-                code = hourly_data['weather_code'][i]
                 type_desc = get_weather_desc(code)
                 if prec_sum < 1.0: force = "небольшой"
                 elif prec_sum < 5.0: force = "умеренный"
@@ -57,8 +58,10 @@ def get_precipitation_info(hourly_data, start_hour):
                 if code in [80, 81, 82]: force = "интенсивный"
                 if code in [71, 73, 75, 85, 86] and hourly_data['wind_speed_10m'][i] > 20:
                     type_desc = "метель"
-                time = i % 24
-                return f"{force} {type_desc} около {time:02d}:00"
+                res = f"{force} {type_desc} около {i%24:02d}:00"
+                print(f"Результат найден: {res}")
+                return res
+    print("Осадки не обнаружены.")
     return "не ожидаются"
 
 def get_kp_desc(kp):
@@ -73,44 +76,39 @@ def main():
     current_date = now.strftime("%d.%m.%Y")
 
     # 1. Сбор данных
-    print(f"Шаг 1: Получение метеоданных для Пинска...")
+    print("Шаг 1: Сбор метеоданных...")
     w_url = (f"https://api.open-meteo.com/v1/forecast?latitude={LAT}&longitude={LON}"
-             "&current=temperature_2m,apparent_temperature,surface_pressure,weather_code,wind_speed_10m,cloud_cover,uv_index,precipitation,rain,showers,snowfall"
-             "&hourly=temperature_2m,weather_code,wind_speed_10m,precipitation,rain,showers,snowfall,cloud_cover"
+             "&current=temperature_2m,apparent_temperature,surface_pressure,weather_code,wind_speed_10m,cloud_cover,uv_index,precipitation"
+             "&hourly=temperature_2m,weather_code,wind_speed_10m,precipitation,cloud_cover"
              "&daily=sunrise,sunset&timezone=auto")
     aq_url = f"https://air-quality-api.open-meteo.com/v1/air-quality?latitude={LAT}&longitude={LON}&current=pm2_5"
-    kp_url = "https://services.swpc.noaa.gov/products/noaa-estimated-planetary-k-index-1-minute.json"
+    kp_url = "https://services.swpc.noaa.gov/products/noaa-estimated-planetary-k-index.json"
 
     try:
-        w_res = requests.get(w_url)
-        print(f"Погода: {w_res.status_code}")
-        w = w_res.json()
-
-        aq_res = requests.get(aq_url)
-        print(f"Воздух: {aq_res.status_code}")
-        aq = aq_res.json()
-
-        kp_res = requests.get(kp_url)
-        print(f"Магнитный фон: {kp_res.status_code}")
-        current_kp = float(kp_res.json()[-1][1])
-    except Exception as e:
-        print(f"Ошибка при получении данных: {e}")
+        w = requests.get(w_url).json()
+        aq = requests.get(aq_url).json()
+        kp_res = requests.get(kp_url).json()
+        current_kp = float(kp_res[-1][1])
+    except:
         current_kp = 1.0
 
-    cur = w['current']
     history_file = 'weather_history.json'
     try:
         with open(history_file, 'r') as f: history = json.load(f)
-    except:
-        print("Файл истории не найден, создаю новый.")
-        history = {}
+    except: history = {}
+
+    # Защита от дублей (проверка по часу)
+    if history.get('last_sent_hour') == hour:
+        print(f"Пропускаю: Сообщение за {hour}:00 уже отправлялось.")
+        return
 
     prec_forecast = get_precipitation_info(w['hourly'], hour)
+    cur = w['current']
     weather_context = f"Темп: {cur['temperature_2m']}°C, Давление: {int(cur['surface_pressure'] * 0.750062)} мм, Осадки: {prec_forecast}"
     msg = ""
     ai_prompt = ""
 
-    # Блок формирования сообщения (Утро/День/Вечер)
+    # ТВОИ ОРИГИНАЛЬНЫЕ ПРОМПТЫ БЕЗ ИЗМЕНЕНИЙ
     if 4 <= hour <= 9:
         history['morning_temp'] = cur['temperature_2m']
         msg = (f"#прогнозутро\n\n"
@@ -161,56 +159,30 @@ def main():
         prev = history.get('day_temp', 'неизвестно')
         ai_prompt = f"Сегодня {current_date}. Ты метеоролог. Сейчас вечер в Пинске. Данные вечер ({cur['temperature_2m']}°C) и день ({prev}°C). Расскажи как изменилась погода, как это ощущается и чего ждать ночью. Кратко 1-2 предложения. Если нет каких-то данных просто сообщи. Пиши сразу по существу, без вводных фраз и заголовков. Не пиши очевидные вещи."
 
-    # 4. ИИ Анализ (Новые бесплатные модели)
-    print("Шаг 2: Запрос к ИИ-агентам...")
-    models = [
-        "google/gemini-2.0-pro-exp-02-05:free",
-        "deepseek/deepseek-chat:free",
-        "meta-llama/llama-3.1-8b-instruct:free",
-        "google/gemini-2.0-flash-001"
-    ]
-
-    ai_success = False
+    # 2. ИИ Анализ
+    print("Шаг 2: ИИ анализ...")
+    models = ["google/gemini-2.0-flash-001", "google/gemini-2.0-flash-lite-001", "mistralai/mistral-7b-instruct:free"]
     for model in models:
-        print(f"Пробую модель: {model}...")
         try:
-            ai_res = requests.post(
-                "https://openrouter.ai/api/v1/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {os.getenv('OPENROUTER_API_KEY')}",
-                    "HTTP-Referer": "https://github.com/weather_al"
-                },
-                json={"model": model, "messages": [{"role": "user", "content": ai_prompt}]},
-                timeout=60
-            )
+            res = requests.post("https://openrouter.ai/api/v1/chat/completions",
+                headers={"Authorization": f"Bearer {os.getenv('OPENROUTER_API_KEY')}"},
+                json={"model": model, "messages": [{"role": "user", "content": ai_prompt}]}, timeout=40).json()
+            if 'choices' in res:
+                # Убираем лишнее форматирование ИИ
+                msg += f"\n\n{res['choices'][0]['message']['content'].strip().replace('*', '').replace('_', '').replace('`', '')}"
+                print(f"Успех с {model}")
+                break
+        except: continue
 
-            if ai_res.status_code == 200:
-                res_json = ai_res.json()
-                if 'choices' in res_json:
-                    ai_text = res_json['choices'][0]['message']['content'].replace('*', '').replace('_', '').replace('`', '')
-                    msg += f"\n\n{ai_text}"
-                    print(f"Успех с моделью {model}!")
-                    ai_success = True
-                    break
-            else:
-                print(f"Ошибка {model}: {ai_res.status_code} - {ai_res.text}")
-        except Exception as e:
-            print(f"Сбой при обращении к {model}: {e}")
-
-    if not ai_success:
-        print("Ни одна из ИИ моделей не ответила.")
-
-    # 5. Финализация
-    print("Шаг 3: Сохранение истории и отправка...")
-    with open(history_file, 'w') as f: json.dump(history, f)
-
+    # 3. Отправка и сохранение истории
+    print("Шаг 3: Отправка и финализация...")
     tg_res = requests.post(f"https://api.telegram.org/bot{os.getenv('TELEGRAM_TOKEN')}/sendMessage",
                   json={"chat_id": os.getenv('CHANNEL_ID'), "text": msg, "parse_mode": "Markdown"})
 
     if tg_res.status_code == 200:
-        print("Сообщение успешно доставлено в Telegram.")
-    else:
-        print(f"Ошибка отправки в TG: {tg_res.status_code} - {tg_res.text}")
+        history['last_sent_hour'] = hour
+        with open(history_file, 'w') as f: json.dump(history, f)
+        print("Готово!")
 
 if __name__ == "__main__":
     main()

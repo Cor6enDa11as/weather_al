@@ -1,42 +1,49 @@
-name: Weather Bot CI
+name: Pinsk Weather Bot
 
 on:
   schedule:
-    - cron: '0 2,11,17 * * *' # Запуски в 05:00, 14:00, 20:00 по МСК (UTC+3)
-  workflow_dispatch:
+    # Нестандартное время: за 13 минут до ровного часа
+    - cron: '47 1,10,16 * * *'
+  workflow_dispatch: # Кнопка для ручного запуска
 
 jobs:
-  build:
+  run-bot:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
-          python-version: '3.9'
+          python-version: '3.10'
 
       - name: Install dependencies
         run: pip install requests
 
+      # Загружаем историю (память бота)
       - name: Download history
         uses: actions/download-artifact@v4
         with:
           name: weather-history
-          path: .
         continue-on-error: true
 
       - name: Run bot
-        run: python weather_bot.py
         env:
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           CHANNEL_ID: ${{ secrets.CHANNEL_ID }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: python weather_bot.py
 
-      - name: Save history
+      # Сохраняем историю для следующих запусков
+      - name: Upload history
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: weather-history
           path: weather_history.json
-          retention-days: 1
+          retention-days: 3
+          overwrite: true
