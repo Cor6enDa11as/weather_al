@@ -46,8 +46,8 @@ def main():
     hour, current_date = now.hour, now.strftime("%d.%m.%Y")
 
     # ПЕРИОДЫ ДЛЯ ЗАЩИТЫ ОТ ДУБЛЕЙ
-    if 4 <= hour <= 11: period = "morning"
-    elif 12 <= hour <= 17: period = "day"
+    if 4 <= hour <= 12: period = "morning"
+    elif 13 <= hour <= 18: period = "day"
     else: period = "evening"
 
     history_file = 'weather_history.json'
