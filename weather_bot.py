@@ -60,16 +60,27 @@ def main():
         print(f"--- Пропуск: прогноз за {period} уже был отправлен сегодня ---")
         return
 
-    # 1. СБОР ДАННЫХ И ЛОГИ ОШИБОК
+    # 1. СБОР ДАННЫХ И ЛОГИ ОШИБОК (ИСПРАВЛЕНО)
+    current_kp, pm25 = "нет данных", "нет данных"
     try:
-        w = requests.get(f"https://api.open-meteo.com/v1/forecast?latitude={LAT}&longitude={LON}&current=temperature_2m,apparent_temperature,surface_pressure,weather_code,wind_speed_10m,cloud_cover,uv_index,precipitation&hourly=temperature_2m,weather_code,wind_speed_10m,precipitation,cloud_cover&daily=sunrise,sunset&timezone=auto").json()
-        aq = requests.get(f"https://air-quality-api.open-meteo.com/v1/air-quality?latitude={LAT}&longitude={LON}&current=pm2_5").json()
-        kp_res = requests.get("https://services.swpc.noaa.gov/products/noaa-estimated-planetary-k-index.json").json()
-        current_kp = float(kp_res[-1][1])
-        print(f"--- Данные получены: Temp {w['current']['temperature_2m']}°C, Kp {current_kp}, PM2.5 {aq['current']['pm2_5']} ---")
+        w_res = requests.get(f"https://api.open-meteo.com/v1/forecast?latitude={LAT}&longitude={LON}&current=temperature_2m,apparent_temperature,surface_pressure,weather_code,wind_speed_10m,cloud_cover,uv_index,precipitation&hourly=temperature_2m,weather_code,wind_speed_10m,precipitation,cloud_cover&daily=sunrise,sunset&timezone=auto", timeout=15)
+        w = w_res.json()
+        print(f"--- Данные получены: Temp {w['current']['temperature_2m']}°C ---")
     except Exception as e:
-        print(f"--- Ошибка получения данных: {e} ---")
+        print(f"--- Ошибка получения погоды: {e} ---")
         return
+
+    try:
+        aq_res = requests.get(f"https://air-quality-api.open-meteo.com/v1/air-quality?latitude={LAT}&longitude={LON}&current=pm2_5", timeout=10)
+        pm25 = aq_res.json()['current']['pm2_5']
+    except:
+        print("--- Ошибка данных воздуха (пропуск) ---")
+
+    try:
+        kp_res = requests.get("https://services.swpc.noaa.gov/products/noaa-estimated-planetary-k-index.json", timeout=10).json()
+        current_kp = float(kp_res[-1][1])
+    except:
+        print("--- Ошибка данных Kp (пропуск) ---")
 
     prec_forecast = get_precipitation_info(w['hourly'], hour)
     cur = w['current']
@@ -79,17 +90,17 @@ def main():
     # ТВОИ ПРОМПТЫ И СООБЩЕНИЯ
     if period == "morning":
         history['morning_temp'] = cur['temperature_2m']
-        msg = (f"#прогнозутро\n\n🏙 Пинск сейчас:\n🌡 Температура: {cur['temperature_2m']}°C (ощущ. {cur['apparent_temperature']}°C)\n☁️ Облачность: {cur['cloud_cover']}% ({get_weather_desc(cur['weather_code'])})\n💨 Ветер: {cur['wind_speed_10m']} км/ч ({get_wind_power(cur['wind_speed_10m'])})\n🌧 Осадки: {prec_forecast}\n📈 Давление: {int(cur['surface_pressure'] * 0.750062)} мм\n🧲 Магнитный фон: {current_kp} Kp\n🕒 Световой день: {w['daily']['sunrise'][0][-5:]} — {w['daily']['sunset'][0][-5:]}\n🍃 Воздух: {aq['current']['pm2_5']} PM2.5\n")
+        msg = (f"#прогнозутро\n\n🏙 Пинск сейчас:\n🌡 Температура: {cur['temperature_2m']}°C (ощущ. {cur['apparent_temperature']}°C)\n☁️ Облачность: {cur['cloud_cover']}% ({get_weather_desc(cur['weather_code'])})\n💨 Ветер: {cur['wind_speed_10m']} км/ч ({get_wind_power(cur['wind_speed_10m'])})\n🌧 Осадки: {prec_forecast}\n📈 Давление: {int(cur['surface_pressure'] * 0.750062)} мм\n🧲 Магнитный фон: {current_kp} Kp\n🕒 Световой день: {w['daily']['sunrise'][0][-5:]} — {w['daily']['sunset'][0][-5:]}\n🍃 Воздух: {pm25} PM2.5\n")
         ai_prompt = f"Сегодня {current_date}. Текущие данные: {weather_context}. Ты метеоролог. Сейчас утро. Дай глубокую АНАЛИТИКУ движения воздушных масс (циклон/антициклон с названием, физические явления, данные бери в интернете) и как это повлияет на погоду предстоящего дня, чего ждать для Пинска. Кратко(1-3 предложения). Пиши сразу по существу, без вводных фраз и заголовков. Дай совет."
     elif period == "day":
         history['day_temp'] = cur['temperature_2m']
         sunset = datetime.datetime.fromisoformat(w['daily']['sunset'][0])
         diff = sunset - now.replace(tzinfo=None)
-        msg = (f"#прогноздень\n\n🏙 Пинск сейчас:\n🌡 Температура: {cur['temperature_2m']}°C (ощущ. {cur['apparent_temperature']}°C)\n☁️ Облачность: {cur['cloud_cover']}%\n💨 Ветер: {cur['wind_speed_10m']} км/ч ({get_wind_power(cur['wind_speed_10m'])})\n🌧 Осадки: {prec_forecast}\n🧲 Магнитный фон: {current_kp} Kp\n📈 Давление: {int(cur['surface_pressure'] * 0.750062)} мм\n☀️ УФ-индекс: {cur['uv_index']}\n🍃 Воздух: {aq['current']['pm2_5']} PM2.5\n🌇 Закат: через {diff.seconds // 3600} ч. {(diff.seconds // 60) % 60} мин.\n")
+        msg = (f"#прогноздень\n\n🏙 Пинск сейчас:\n🌡 Температура: {cur['temperature_2m']}°C (ощущ. {cur['apparent_temperature']}°C)\n☁️ Облачность: {cur['cloud_cover']}%\n💨 Ветер: {cur['wind_speed_10m']} км/ч ({get_wind_power(cur['wind_speed_10m'])})\n🌧 Осадки: {prec_forecast}\n🧲 Магнитный фон: {current_kp} Kp\n📈 Давление: {int(cur['surface_pressure'] * 0.750062)} мм\n☀️ УФ-индекс: {cur['uv_index']}\n🍃 Воздух: {pm25} PM2.5\n🌇 Закат: через {diff.seconds // 3600} ч. {(diff.seconds // 60) % 60} мин.\n")
         ai_prompt = f"Сегодня {current_date}. Ты метеоролог. Сейчас обеденное время в Пинске. Текущие данные ({cur['temperature_2m']}°C) и утренние ({history.get('morning_temp','?') }°C) в Пинске. Расскажи как изменилась погода и как это ощущается, чего ждать к вечеру. Кратко 1-2 предложения. Если нет каких-то данных просто сообщи. Пиши сразу по существу, без вводных фраз и заголовков. Не пиши очевидные и банальные вещи."
     else:
         night_temps = w['hourly']['temperature_2m'][hour:hour+9]
-        msg = (f"#прогнозвечер\n\n🏙 Пинск сейчас:\n🌡 Температура: {cur['temperature_2m']}°C\n☁️ Облачность: {cur['cloud_cover']}%\n💨 Ветер: {cur['wind_speed_10m']} км/ч ({get_wind_power(cur['wind_speed_10m'])})\n🌧 Осадки: {prec_forecast}\n📈 Давление: {int(cur['surface_pressure'] * 0.750062)} мм\n🍃 Воздух: {aq['current']['pm2_5']} PM2.5\n\n🌒 Ночь\n🌡 От {min(night_temps)}°C до {max(night_temps)}°C\n☁️ Облачность ночью: {w['hourly']['cloud_cover'][hour+4]}%\n💨 Ветер: {w['hourly']['wind_speed_10m'][hour+4]} км/ч\n")
+        msg = (f"#прогнозвечер\n\n🏙 Пинск сейчас:\n🌡 Температура: {cur['temperature_2m']}°C\n☁️ Облачность: {cur['cloud_cover']}%\n💨 Ветер: {cur['wind_speed_10m']} км/ч ({get_wind_power(cur['wind_speed_10m'])})\n🌧 Осадки: {prec_forecast}\n📈 Давление: {int(cur['surface_pressure'] * 0.750062)} мм\n🍃 Воздух: {pm25} PM2.5\n\n🌒 Ночь\n🌡 От {min(night_temps)}°C до {max(night_temps)}°C\n☁️ Облачность ночью: {w['hourly']['cloud_cover'][hour+4]}%\n💨 Ветер: {w['hourly']['wind_speed_10m'][hour+4]} км/ч\n")
         ai_prompt = f"Сегодня {current_date}. Ты метеоролог. Сейчас вечер в Пинске. Данные вечер ({cur['temperature_2m']}°C) и день ({history.get('day_temp','?') }°C). Расскажи как изменилась погода, как это ощущается и чего ждать ночью. Кратко 1-2 предложения. Если нет каких-то данных просто сообщи. Пиши сразу по существу, без вводных фраз и заголовков. Не пиши очевидные вещи."
 
     # 2. ИИ АГЕНТЫ И ЛОГИ
@@ -113,7 +124,7 @@ def main():
         with open(history_file, 'w') as f: json.dump(history, f)
         print(f"--- Успех: Сообщение за {period} отправлено ---")
     else:
-        print(f"--- Ошибка отправки в Telegram: {tg_res.status_code}, Текст: {tg_res.text} ---")
+        print(f"--- Ошибка отправки в Telegram: {tg_res.status_code} ---")
 
 if __name__ == "__main__":
     main()
