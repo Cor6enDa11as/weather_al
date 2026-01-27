@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 
-#!/usr/bin/env python3
 import os, requests, datetime, json
 
 # --- Настройки Пинск ---
@@ -62,8 +61,8 @@ def get_humidity_desc(h):
     if h < 80: return "(влажно 💧)"
     return "(сыро 🌧️)"
 
-def get_precipitation_info(hourly_data, start_hour):
-    for i in range(start_hour, start_hour + 12):
+def get_precipitation_info(hourly_data, start_hour, hours_to_check=12):
+    for i in range(start_hour, start_hour + hours_to_check):
         if i < len(hourly_data['precipitation']):
             prec_sum = hourly_data['precipitation'][i]
             code = hourly_data['weather_code'][i]
@@ -102,9 +101,8 @@ def main():
         pm25 = aq_res.json()['current']['pm2_5']
     except: pass
     try:
-        kp_url = f"https://kp.gfz-potsdam.de/app/json/?index=Kp&start={now.strftime('%Y-%m-%dT00:00:00Z')}&end={now.strftime('%Y-%m-%dT23:59:59Z')}"
-        kp_res = requests.get(kp_url, timeout=10).json()
-        current_kp = float(kp_res['data'][-1])
+        kp_res = requests.get("https://services.swpc.noaa.gov/products/noaa-estimated-planetary-k-index.json", timeout=10).json()
+        current_kp = float(kp_res[-1][1])
     except: pass
 
     prec_forecast = get_precipitation_info(w['hourly'], hour)
@@ -121,7 +119,7 @@ def main():
     if period == "morning":
         history['m'] = current_data
         msg = (f"#прогнозутро\n\n🏙 Пинск сейчас:\n🌡 Температура: {cur['temperature_2m']}°C (ощущ. {cur['apparent_temperature']}°C)\n☁️ Облачность: {clouds}% ({get_weather_desc(cur['weather_code'])})\n💨 Ветер: {wind} км/ч {wind_dir} ({get_wind_power(wind)})\n💧 Влажность: {hum}% {get_humidity_desc(hum)}\n🌧 Осадки: {prec_forecast}\n📈 Давление: {press_mm} мм рт. ст. {get_pressure_desc(press_mm)}\n🧲 Магнитный фон: {current_kp} Kp {get_kp_desc(current_kp)}\n🕒 Световой день: {w['daily']['sunrise'][0][-5:]} — {w['daily']['sunset'][0][-5:]}\n🍃 Воздух: {pm25} PM2.5 {get_aqi_desc(pm25)}\n")
-        ai_prompt = f"Сегодня {current_date}. Текущие данные: {weather_context}. Ты метеоролог. Сейчас утро. Дай глубокую АНАЛИТИКУ движения воздушных масс (циклон/антициклон с названием, физические явления, данные бери в интернете) и как это повлияет на погоду предстоящего дня, чего ждать для Пинска. Кратко(1-2 предложения). Пиши сразу по существу, без вводных фраз и заголовков, уверенно. Дай совет."
+        ai_prompt = f"Сегодня {current_date}. Текущие данные: {weather_context}. Ты метеоролог. Сейчас утро. Дай глубокую АНАЛИТИКУ движения воздушных масс (циклон/антициклон с названием, физические явления, данные бери в интернете) и как это повлияет на погоду предстоящего дня, чего ждать для Пинска. Кратко(1-3 предложения). Пиши сразу по существу, без вводных фраз и заголовков, уверенно. Дай совет."
     elif period == "day":
         history['d'] = current_data
         m = history.get('m', {})
@@ -133,24 +131,40 @@ def main():
         d = history.get('d', history.get('m', {}))
         history_str = f"Днем: Т:{d.get('t')}°C, Давл:{d.get('p')}мм, Влаж:{d.get('h')}%, Ветер:{d.get('w')}км/ч {d.get('wd')}, Обл:{d.get('c')}%, Кп:{d.get('kp')}, Осадки:{d.get('pr')}"
         night_temps = w['hourly']['temperature_2m'][hour:hour+9]
-        msg = (f"#прогнозвечер\n\n🏙 Пинск сейчас:\n🌡 Температура: {cur['temperature_2m']}°C\n☁️ Облачность: {clouds}%\n💨 Ветер: {wind} км/ч {wind_dir}\n💧 Влажность: {hum}% {get_humidity_desc(hum)}\n🌧 Осадки: {prec_forecast}\n📈 Давление: {press_mm} мм рт. ст. {get_pressure_desc(press_mm)}\n🍃 Воздух: {pm25} PM2.5 {get_aqi_desc(pm25)}\n\n🌒 Ночь\n🌡 От {min(night_temps)}°C до {max(night_temps)}°C\n☁️ Облачность ночью: {w['hourly']['cloud_cover'][hour+4]}%\n💨 Ветер: {w['hourly']['wind_speed_10m'][hour+4]} км/ч\n")
-        ai_prompt = f"Сегодня {current_date}. Ты метеоролог. Сейчас вечер. Данные сейчас: {weather_context}и днём ({history_str}). Ночью будет {min(night_temps)}°C. Расскажи как изменилась погода и как это ощущается и чего ждать ночью. Кратко 1-2 предложения. Пиши сразу по существу."
+        night_prec = get_precipitation_info(w['hourly'], hour, 9)
+        msg = (f"#прогнозвечер\n\n🏙 Пинск сейчас:\n🌡 Температура: {cur['temperature_2m']}°C\n☁️ Облачность: {clouds}%\n💨 Ветер: {wind} км/ч {wind_dir} ({get_wind_power(wind)})\n💧 Влажность: {hum}% {get_humidity_desc(hum)}\n🌧 Осадки: {prec_forecast}\n📈 Давление: {press_mm} мм рт. ст. {get_pressure_desc(press_mm)}\n🍃 Воздух: {pm25} PM2.5 {get_aqi_desc(pm25)}\n\n🌒 Ночь\n🌡 От {min(night_temps)}°C до {max(night_temps)}°C\n🌧 Осадки ночью: {night_prec}\n☁️ Облачность ночью: {w['hourly']['cloud_cover'][hour+4]}%\n💨 Ветер ночью: {w['hourly']['wind_speed_10m'][hour+4]} км/ч\n")
+        ai_prompt = f"Сегодня {current_date}. Ты метеоролог. Сейчас вечер. Данные сейчас: {weather_context} и днём ({history_str}). Ночью будет {min(night_temps)}°C, осадки: {night_prec}. Расскажи как изменилась погода и как это ощущается и чего ждать ночью. Кратко 1-2 предложения. Пиши сразу по существу."
 
-    models = ["google/gemini-2.0-flash-001", "google/gemini-2.0-flash-lite-001"]
-    for model in models:
+    # Каскад ИИ: Groq -> Mistral -> Cohere
+    ai_success = False
+    # 1. Groq
+    try:
+        res = requests.post("https://api.groq.com/openai/v1/chat/completions", headers={"Authorization": f"Bearer {os.getenv('GROQ_API_KEY')}"}, json={"model": "llama-3.3-70b-versatile", "messages": [{"role": "user", "content": ai_prompt}]}, timeout=25).json()
+        if 'choices' in res:
+            msg += f"\n\n{res['choices'][0]['message']['content'].strip()}"
+            ai_success = True
+    except: pass
+    # 2. Mistral
+    if not ai_success:
         try:
-            res = requests.post("https://openrouter.ai/api/v1/chat/completions", headers={"Authorization": f"Bearer {os.getenv('OPENROUTER_API_KEY')}"}, json={"model": model, "messages": [{"role": "user", "content": ai_prompt}]}, timeout=40).json()
+            res = requests.post("https://api.mistral.ai/v1/chat/completions", headers={"Authorization": f"Bearer {os.getenv('MISTRAL_API_KEY')}"}, json={"model": "mistral-small-latest", "messages": [{"role": "user", "content": ai_prompt}]}, timeout=25).json()
             if 'choices' in res:
                 msg += f"\n\n{res['choices'][0]['message']['content'].strip()}"
-                print(f"--- ИИ агент {model} сработал ---"); break
-        except Exception as e: print(f"--- Ошибка ИИ {model}: {e} ---")
+                ai_success = True
+        except: pass
+    # 3. Cohere
+    if not ai_success:
+        try:
+            res = requests.post("https://api.cohere.ai/v1/chat", headers={"Authorization": f"Bearer {os.getenv('COHERE_API_KEY')}", "Content-Type": "application/json"}, json={"message": ai_prompt, "model": "command-r-plus"}, timeout=25).json()
+            if 'text' in res:
+                msg += f"\n\n{res['text'].strip()}"
+                ai_success = True
+        except: pass
 
     tg_res = requests.post(f"https://api.telegram.org/bot{os.getenv('TELEGRAM_TOKEN')}/sendMessage", json={"chat_id": os.getenv('CHANNEL_ID'), "text": msg, "parse_mode": "Markdown"})
     if tg_res.status_code == 200:
         history['last_sent_key'] = run_key
         with open(history_file, 'w') as f: json.dump(history, f)
-        print(f"--- Успех: Сообщение за {period} отправлено ---")
-    else: print(f"--- Ошибка отправки в Telegram: {tg_res.status_code} ---")
 
 if __name__ == "__main__":
     main()
