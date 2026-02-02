@@ -88,7 +88,6 @@ def get_belhydromet_context():
         if m_feed.entries:
             synoptic_3days = BeautifulSoup(m_feed.entries[0].description, "html.parser").get_text().strip()
             print(f"✅ Сводка: Найдена ({len(synoptic_3days)} симв.)")
-            print(f"📄 Текст: {synoptic_3days[:120]}...")
         else: print("⚠️ Сводка: Пусто")
 
         print(f"[{ts}] Запрос RSS шторма...")
@@ -107,7 +106,6 @@ def main():
     current_date_key = now.strftime("%d.%m.%Y")
     period = "morning" if 4 <= hour <= 11 else "day" if 12 <= hour <= 17 else "evening"
 
-    # --- ЗАЩИТА ОТ ЛОЖНЫХ ЗАПУСКОВ ---
     history_file = 'weather_history.json'
     try:
         with open(history_file, 'r') as f: history = json.load(f)
@@ -118,69 +116,106 @@ def main():
         print(f"--- Пропуск: {period} уже отправлен ---")
         return
 
-    # 1. Погода и воздух
+    print("--- 🛠️ СБОР ДАННЫХ (УМНЫЙ КАСКАД) ---")
+    
+    # 1. КАСКАД ПОГОДЫ (Температура, Давление, Ветер)
+    cur = {}
+    hourly_backup = None
+    daily_backup = None
+    
     try:
-        w_res = requests.get(f"https://api.open-meteo.com/v1/forecast?latitude={LAT}&longitude={LON}&current=temperature_2m,relative_humidity_2m,apparent_temperature,surface_pressure,weather_code,wind_speed_10m,wind_direction_10m,cloud_cover,uv_index,precipitation&hourly=temperature_2m,weather_code,wind_speed_10m,precipitation,cloud_cover&daily=sunrise,sunset&timezone=auto", timeout=15)
-        w = w_res.json()
-        aq_res = requests.get(f"https://air-quality-api.open-meteo.com/v1/air-quality?latitude={LAT}&longitude={LON}&current=pm2_5", timeout=10)
-        pm25 = aq_res.json()['current']['pm2_5']
-    except Exception as e: print(f"❌ Ошибка API: {e}"); return
+        w_res = requests.get(f"https://api.open-meteo.com/v1/forecast?latitude={LAT}&longitude={LON}&current=temperature_2m,relative_humidity_2m,apparent_temperature,surface_pressure,weather_code,wind_speed_10m,wind_direction_10m,cloud_cover,uv_index,precipitation&hourly=temperature_2m,weather_code,wind_speed_10m,precipitation,cloud_cover&daily=sunrise,sunset&timezone=auto", timeout=15).json()
+        cur = w_res['current']
+        hourly_backup = w_res['hourly']
+        daily_backup = w_res['daily']
+        print("✅ Погода: [Open-Meteo] OK")
+    except:
+        print("❌ Погода: [Open-Meteo] Ошибка. Пробую BrightSky...")
+        try:
+            bs_res = requests.get(f"https://api.brightsky.dev/current?lat={LAT}&lon={LON}", timeout=10).json()
+            w = bs_res['weather']
+            cur = {
+                'temperature_2m': w['temperature'],
+                'relative_humidity_2m': w['relative_humidity'],
+                'apparent_temperature': w['temperature'], # BrightSky не всегда дает ощущаемую
+                'surface_pressure': w['pressure_msl'],
+                'weather_code': 0, # Коды отличаются, ставим 0
+                'wind_speed_10m': w['wind_speed'],
+                'wind_direction_10m': w['wind_direction'],
+                'cloud_cover': w['cloud_cover'],
+                'uv_index': 0,
+                'precipitation': 0
+            }
+            print("✅ Погода: [BrightSky] OK (Резерв)")
+        except: print("⚠️ Погода: Все основные источники недоступны")
 
-    # 2. ТРОЙНОЙ КОНТУР Kp-ИНДЕКСА
-    current_kp = "нет данных"
+    # 2. КАСКАД ВОЗДУХА (PM2.5)
+    pm25 = "нет данных"
     try:
-        # Универсальный Open-Meteo
-        kp_res = requests.get("https://api.open-meteo.com/v1/forecast?latitude=52.52&longitude=13.41&hourly=magnetic_field_k_index", timeout=10)
-        current_kp = kp_res.json()['hourly']['magnetic_field_k_index'][0]
-        print(f"✅ Kp (Open-Meteo): {current_kp}")
+        aq_res = requests.get(f"https://air-quality-api.open-meteo.com/v1/air-quality?latitude={LAT}&longitude={LON}&current=pm2_5", timeout=10).json()
+        pm25 = aq_res['current']['pm2_5']
+        print("✅ Воздух: [Open-Meteo] OK")
     except:
         try:
-            # GFZ Potsdam (Официальный стандарт)
-            kp_res = requests.get("https://kp.gfz-potsdam.de/app/json/kp", timeout=10)
-            current_kp = kp_res.json()['kp'][-1]
-            print(f"✅ Kp (GFZ Potsdam): {current_kp}")
+            aq_res = requests.get(f"https://api.waqi.info/feed/geo:{LAT};{LON}/?token=demo", timeout=10).json()
+            pm25 = aq_res['data']['iaqi']['pm25']['v']
+            print("✅ Воздух: [WAQI] OK (Резерв)")
+        except: print("❌ Воздух: Нет данных")
+
+    # 3. ТРОЙНОЙ КОНТУР Kp-ИНДЕКСА (GFZ -> Open-Meteo -> NOAA)
+    current_kp = "нет данных"
+    try:
+        kp_res = requests.get("https://kp.gfz-potsdam.de/app/json/kp", timeout=10).json()
+        current_kp = kp_res['kp'][-1]
+        print(f"✅ Kp-индекс: [GFZ Potsdam] OK ({current_kp})")
+    except:
+        try:
+            kp_res = requests.get("https://api.open-meteo.com/v1/forecast?latitude=52.52&longitude=13.41&hourly=magnetic_field_k_index", timeout=10).json()
+            current_kp = kp_res['hourly']['magnetic_field_k_index'][0]
+            print(f"✅ Kp-индекс: [Open-Meteo] OK ({current_kp})")
         except:
             try:
-                # NOAA (Запасной)
-                kp_res = requests.get("https://services.swpc.noaa.gov/products/noaa-estimated-planetary-k-index.json", timeout=10)
-                current_kp = float(kp_res.json()[-1][1])
-                print(f"✅ Kp (NOAA): {current_kp}")
-            except: print("⚠️ Все источники Kp недоступны")
+                kp_res = requests.get("https://services.swpc.noaa.gov/products/noaa-estimated-planetary-k-index.json", timeout=10).json()
+                current_kp = float(kp_res[-1][1])
+                print(f"✅ Kp-индекс: [NOAA] OK ({current_kp})")
+            except: print("❌ Kp-индекс: Все источники недоступны")
+    
+    print("---------------------------------------\n")
+
+    if not cur: print("🚨 КРИТИЧЕСКАЯ ОШИБКА: Нет данных для работы."); return
 
     syn_3days, storm_raw = get_belhydromet_context()
-    cur = w['current']
     press_mm = int(cur['surface_pressure'] * 0.750062)
     hum, wind, clouds = cur['relative_humidity_2m'], cur['wind_speed_10m'], cur['cloud_cover']
     wind_dir = get_wind_dir(cur['wind_direction_10m'])
-    prec_forecast = get_precipitation_info(w['hourly'], hour)
+    
+    # Осадки (только если есть данные Open-Meteo)
+    prec_forecast = get_precipitation_info({'precipitation': hourly_backup['precipitation'], 'weather_code': hourly_backup['weather_code']}, hour) if hourly_backup else "нет данных"
 
     current_data = {'t': cur['temperature_2m'], 'p': press_mm, 'h': hum, 'w': wind, 'wd': wind_dir, 'c': clouds, 'kp': current_kp, 'pr': prec_forecast}
     weather_context = f"Темп: {cur['temperature_2m']}°C, Давл: {press_mm}мм, Влаж: {hum}%, Ветер: {wind}км/ч {wind_dir}, Обл: {clouds}%, Осадки: {prec_forecast}"
 
-    # Динамический блок шторма
     storm_rule = f"ПРАВИЛА: Штормовое предупреждение (если есть: {storm_raw}) вынеси ОТДЕЛЬНЫМ ПРЕДЛОЖЕНИЕМ В НАЧАЛО с ⚠️." if storm_raw else ""
     role_info = "Ты — ведущий синоптик национальной метеослужбы. Твой стиль: научно-популярный, профессиональный. Используй профессиональные термины в своих прогнозах"
 
     if period == "morning":
         history['m'] = current_data
-        msg = (f"#прогнозутро\n\n🏙 Пинск сейчас:\n🌡 Температура: {cur['temperature_2m']}°C (ощущ. {cur['apparent_temperature']}°C)\n☁️ Облачность: {clouds}% ({get_weather_desc(cur['weather_code'])})\n💨 Ветер: {wind} км/ч {wind_dir} ({get_wind_power(wind)})\n💧 Влажность: {hum}% {get_humidity_desc(hum)}\n🌧 Осадки: {prec_forecast}\n📈 Давление: {press_mm} мм рт. ст. {get_pressure_desc(press_mm)}\n🧲 Магнитный фон: {current_kp} Kp {get_kp_desc(current_kp)}\n🕒 Световой день: {w['daily']['sunrise'][0][-5:]} — {w['daily']['sunset'][0][-5:]}\n🍃 Воздух: {pm25} PM2.5 {get_aqi_desc(pm25)}\n")
-        ai_prompt = f"{role_info} Сегодня {current_date_str}. Пинск: {weather_context}. Сводка РБ на 3 дня: {syn_3days}.Найди в сводке РБ данные на {current_date_str}.Проанализируй все данные. Определи барическую систему и её влияние и опиши физику ощущений для человека на улице. {storm_rule} Цифры не используй.Пиши кратко, 1-2 предложения кроме штормового предупреждения.Без вводных слов."
+        msg = (f"#прогнозутро\n\n🏙 Пинск сейчас:\n🌡 Температура: {cur['temperature_2m']}°C (ощущ. {cur['apparent_temperature']}°C)\n☁️ Облачность: {clouds}% ({get_weather_desc(cur['weather_code'])})\n💨 Ветер: {wind} км/ч {wind_dir} ({get_wind_power(wind)})\n💧 Влажность: {hum}% {get_humidity_desc(hum)}\n🌧 Осадки: {prec_forecast}\n📈 Давление: {press_mm} мм рт. ст. {get_pressure_desc(press_mm)}\n🧲 Магнитный фон: {current_kp} Kp {get_kp_desc(current_kp)}\n🕒 Световой день: {daily_backup['sunrise'][0][-5:] if daily_backup else '--:--'} — {daily_backup['sunset'][0][-5:] if daily_backup else '--:--'}\n🍃 Воздух: {pm25} PM2.5 {get_aqi_desc(pm25)}\n")
+        ai_prompt = f"{role_info} Сегодня {current_date_str}. Пинск: {weather_context}. Сводка РБ на 3 дня: {syn_3days}.Найди в сводке РБ данные на {current_date_str}.Проанализируй все данные. Определи доминирующую воздушную массу и её влияние и опиши как ощущается погода на улице для человека . {storm_rule} Цифры не используй.Пиши кратко, 1-2 предложения кроме штормового предупреждения.Без вводных слов."
     elif period == "day":
         history['d'] = current_data
         m = history.get('m', {})
         history_str = f"Утро: Т:{m.get('t')}°C, Давл:{m.get('p')}мм, Влаж:{m.get('h')}%, Ветер:{m.get('w')}км/ч {m.get('wd')}"
-        sunset = datetime.datetime.fromisoformat(w['daily']['sunset'][0]); diff = sunset - now.replace(tzinfo=None)
-        msg = (f"#прогноздень\n\n🏙 Пинск сейчас:\n🌡 Температура: {cur['temperature_2m']}°C (ощущ. {cur['apparent_temperature']}°C)\n☁️ Облачность: {clouds}%\n💨 Ветер: {wind} км/ч {wind_dir} ({get_wind_power(wind)})\n💧 Влажность: {hum}% {get_humidity_desc(hum)}\n🌧 Осадки: {prec_forecast}\n🧲 Магнитный фон: {current_kp} Kp {get_kp_desc(current_kp)}\n📈 Давление: {press_mm} мм рт. ст. {get_pressure_desc(press_mm)}\n☀️ УФ-индекс: {cur['uv_index']} {get_uv_desc(cur['uv_index'])}\n🍃 Воздух: {pm25} PM2.5 {get_aqi_desc(pm25)}\n🌇 Закат: через {diff.seconds // 3600} ч. {(diff.seconds // 60) % 60} мин.\n")
-        ai_prompt = f"{role_info} Сейчас обед {current_date_str}. Пинск: {weather_context}. Утром было: {history_str}. Сводка РБ: {syn_3days}.Проанализируй все данные. Расскажи есть или нет изменений в атмосфере по сравнению с утром (если есть то какие) на основе сводки РБ.Как изменились ощущения для человека за окном . {storm_rule} Цифры не используй.Пиши кратко, 1-2 предложения кроме штормового предупреждения.Без вводных слов."
+        msg = (f"#прогноздень\n\n🏙 Пинск сейчас:\n🌡 Температура: {cur['temperature_2m']}°C (ощущ. {cur['apparent_temperature']}°C)\n☁️ Облачность: {clouds}%\n💨 Ветер: {wind} км/ч {wind_dir} ({get_wind_power(wind)})\n💧 Влажность: {hum}% {get_humidity_desc(hum)}\n🌧 Осадки: {prec_forecast}\n🧲 Магнитный фон: {current_kp} Kp {get_kp_desc(current_kp)}\n📈 Давление: {press_mm} мм рт. ст. {get_pressure_desc(press_mm)}\n☀️ УФ-индекс: {cur['uv_index']} {get_uv_desc(cur['uv_index'])}\n🍃 Воздух: {pm25} PM2.5 {get_aqi_desc(pm25)}\n")
+        ai_prompt = f"{role_info} Сейчас обед {current_date_str}. Пинск: {weather_context}. Утром было: {history_str}. Сводка РБ: {syn_3days}.Проанализируй все данные. Расскажи есть или нет изменения в движении воздушных масс по сравнению с утром (если есть то какие) на основе сводки РБ.Как изменились ощущения для человека за окном . {storm_rule} Цифры не используй.Пиши кратко, 1-2 предложения кроме штормового предупреждения.Без вводных слов."
     else:
         d = history.get('d', history.get('m', {}))
         history_str = f"Днем: Т:{d.get('t')}°C, Давл:{d.get('p')}мм, Влаж:{d.get('h')}%, Ветер:{d.get('w')}км/ч {d.get('wd')}"
-        night_temps = w['hourly']['temperature_2m'][hour:hour+9]
-        night_prec = get_precipitation_info(w['hourly'], hour, 9)
+        night_temps = hourly_backup['temperature_2m'][hour:hour+9] if hourly_backup else [cur['temperature_2m']]
+        night_prec = get_precipitation_info({'precipitation': hourly_backup['precipitation'], 'weather_code': hourly_backup['weather_code']}, hour, 9) if hourly_backup else "нет данных"
         msg = (f"#прогнозвечер\n\n🏙 Пинск сейчас:\n🌡 Температура: {cur['temperature_2m']}°C\n☁️ Облачность: {clouds}%\n💨 Ветер: {wind} км/ч {wind_dir} ({get_wind_power(wind)})\n💧 Влажность: {hum}% {get_humidity_desc(hum)}\n🌧 Осадки: {prec_forecast}\n📈 Давление: {press_mm} мм рт. ст. {get_pressure_desc(press_mm)}\n🍃 Воздух: {pm25} PM2.5 {get_aqi_desc(pm25)}\n\n🌒 Ночь\n🌡 От {min(night_temps)}°C до {max(night_temps)}°C\n🌧 Осадки ночью: {night_prec}\n")
-        ai_prompt = f"{role_info} Вечер {current_date_str}. Пинск: {weather_context}. Днем было: {history_str}. Ночью: {min(night_temps)}°C, осадки: {night_prec}. Сводка РБ: {syn_3days}.Проанализируй данные. Подведи итог дня: совпала ли погода с прогнозом Белгидромета?  Расскажи какие изменения в атмосфере ночью (если есть то какие) на основе сводки РБ.Как будет ощущаться погода ночью для человека на улице. {storm_rule} Цифры не используй.Пиши кратко, 1-2 предложения кроме штормового предупреждения.Без вводных слов."
+        ai_prompt = f"{role_info} Вечер {current_date_str}. Пинск: {weather_context}. Днем было: {history_str}. Ночью: {min(night_temps)}°C, осадки: {night_prec}. Сводка РБ: {syn_3days}.Проанализируй данные. Расскажи какие изменения в движении воздушных масс произойдут ночью(если изменений нет, так и говори).Как будет ощущаться погода ночью для человека на улице. {storm_rule} Цифры не используй.Пиши кратко, 1-2 предложения кроме штормового предупреждения.Без вводных слов."
 
-    # --- КАСКАД ИИ (Cohere ПЕРВЫЙ) ---
     ai_success = False
     for api in ["cohere", "groq", "mistral"]:
         try:
@@ -197,7 +232,6 @@ def main():
             msg += f"\n\n{content}"; ai_success = True; print(f"✅ Агент {api} OK"); break
         except Exception as e: print(f"⚠️ Агент {api} ошибка: {e}"); continue
 
-    # Отправка и сохранение
     requests.post(f"https://api.telegram.org/bot{os.getenv('TELEGRAM_TOKEN')}/sendMessage", json={"chat_id": os.getenv('CHANNEL_ID'), "text": msg, "parse_mode": "Markdown"})
     history['last_sent_key'] = run_key
     with open(history_file, 'w') as f: json.dump(history, f)
