@@ -78,13 +78,17 @@ def get_precipitation_info(hourly_data, start_hour, hours_to_check=12):
 def get_belhydromet_context():
     synoptic_3days, storm_msg = "Данные Белгидромета недоступны.", ""
     try:
+        print("--- Получение данных Белгидромета... ---")
         m_feed = feedparser.parse("https://pogoda.by/rss/meteo/")
         if m_feed.entries:
             synoptic_3days = BeautifulSoup(m_feed.entries[0].description, "html.parser").get_text().strip()
+            print("✅ Сводка РБ получена")
         s_feed = feedparser.parse("https://pogoda.by/rss/storm/")
         if s_feed.entries:
             storm_msg = f"{s_feed.entries[0].title}. {s_feed.entries[0].description}"
-    except: pass
+            print(f"⚠️ Штормовое сообщение: {storm_msg[:50]}...")
+    except Exception as e:
+        print(f"❌ Ошибка Белгидромета: {e}")
     return synoptic_3days, storm_msg
 
 def main():
@@ -104,13 +108,21 @@ def main():
         return
 
     try:
+        print(f"--- Запрос погоды для Пинска ({period})... ---")
         w_res = requests.get(f"https://api.open-meteo.com/v1/forecast?latitude={LAT}&longitude={LON}&current=temperature_2m,relative_humidity_2m,apparent_temperature,surface_pressure,weather_code,wind_speed_10m,wind_direction_10m,cloud_cover,uv_index,precipitation&hourly=temperature_2m,weather_code,wind_speed_10m,precipitation,cloud_cover&daily=sunrise,sunset&timezone=auto", timeout=15)
         w = w_res.json()
+        print("✅ Open-Meteo: OK")
+        
         aq_res = requests.get(f"https://air-quality-api.open-meteo.com/v1/air-quality?latitude={LAT}&longitude={LON}&current=pm2_5", timeout=10)
         pm25 = aq_res.json()['current']['pm2_5']
+        print(f"✅ Воздух PM2.5: {pm25}")
+
         kp_res = requests.get("https://services.swpc.noaa.gov/products/noaa-estimated-planetary-k-index.json", timeout=10).json()
         current_kp = float(kp_res[-1][1])
-    except: return
+        print(f"✅ Магнитный фон Kp: {current_kp}")
+    except Exception as e:
+        print(f"❌ Ошибка получения данных: {e}")
+        return
 
     syn_3days, storm_raw = get_belhydromet_context()
     cur = w['current']
@@ -122,7 +134,6 @@ def main():
     current_data = {'t': cur['temperature_2m'], 'p': press_mm, 'h': hum, 'w': wind, 'wd': wind_dir, 'c': clouds, 'kp': current_kp, 'pr': prec_forecast}
     weather_context = f"Темп: {cur['temperature_2m']}°C, Давл: {press_mm}мм, Влаж: {hum}%, Ветер: {wind}км/ч {wind_dir}, Обл: {clouds}%, Осадки: {prec_forecast}"
 
-    # Ролевая установка
     role_info = "Ты — ведущий синоптик национальной метеослужбы. Твой стиль: научно-популярный, профессиональный. Используй профессиональные термины в своих прогнозах"
 
     if period == "morning":
@@ -148,26 +159,41 @@ def main():
 
     # Каскад ИИ
     ai_success = False
+    print("--- Запуск каскада ИИ-агентов... ---")
     for api in ["groq", "mistral", "cohere"]:
         try:
             if api == "groq":
-                res = requests.post("https://api.groq.com/openai/v1/chat/completions", headers={"Authorization": f"Bearer {os.getenv('GROQ_API_KEY')}"}, json={"model": "llama-3.3-70b-versatile", "messages": [{"role": "user", "content": ai_prompt}]}, timeout=25).json()
+                print("🤖 Пробую Groq (llama-3.3-70b)...")
+                res = requests.post("https://api.groq.com/openai/v1/chat/completions", headers={"Authorization": f"Bearer {os.getenv('GROQ_API_KEY')}"}, json={"model": "llama-3.3-70b-specdec", "messages": [{"role": "user", "content": ai_prompt}]}, timeout=25).json()
                 content = res['choices'][0]['message']['content'].strip()
             elif api == "mistral":
+                print("🤖 Пробую Mistral...")
                 res = requests.post("https://api.mistral.ai/v1/chat/completions", headers={"Authorization": f"Bearer {os.getenv('MISTRAL_API_KEY')}"}, json={"model": "mistral-small-latest", "messages": [{"role": "user", "content": ai_prompt}]}, timeout=25).json()
                 content = res['choices'][0]['message']['content'].strip()
             elif api == "cohere":
+                print("🤖 Пробую Cohere...")
                 res = requests.post("https://api.cohere.ai/v1/chat", headers={"Authorization": f"Bearer {os.getenv('COHERE_API_KEY')}", "Content-Type": "application/json"}, json={"message": ai_prompt, "model": "command-r-plus"}, timeout=25).json()
                 content = res['text'].strip()
 
             msg += f"\n\n{content}"
             ai_success = True
+            print(f"✅ Агент {api} успешно обработал запрос")
             break
-        except: continue
+        except Exception as e:
+            print(f"⚠️ Агент {api} упал: {e}")
+            continue
 
-    requests.post(f"https://api.telegram.org/bot{os.getenv('TELEGRAM_TOKEN')}/sendMessage", json={"chat_id": os.getenv('CHANNEL_ID'), "text": msg, "parse_mode": "Markdown"})
-    history['last_sent_key'] = run_key
-    with open(history_file, 'w') as f: json.dump(history, f)
+    if not ai_success:
+        print("❌ Все ИИ-агенты недоступны!")
+
+    print("--- Отправка в Telegram... ---")
+    tg_res = requests.post(f"https://api.telegram.org/bot{os.getenv('TELEGRAM_TOKEN')}/sendMessage", json={"chat_id": os.getenv('CHANNEL_ID'), "text": msg, "parse_mode": "Markdown"})
+    if tg_res.status_code == 200:
+        print("✅ Сообщение успешно доставлено")
+        history['last_sent_key'] = run_key
+        with open(history_file, 'w') as f: json.dump(history, f)
+    else:
+        print(f"❌ Ошибка Telegram: {tg_res.status_code} - {tg_res.text}")
 
 if __name__ == "__main__":
     main()
