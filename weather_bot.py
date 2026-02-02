@@ -37,10 +37,13 @@ def get_pressure_desc(p):
 
 def get_kp_desc(kp):
     if kp == "нет данных" or kp is None: return ""
-    if kp < 4: return "(спокойно)"
-    if kp < 5: return "(небольшие возмущения)"
-    if kp < 6: return "(слабая буря ⚠️)"
-    return "(СИЛЬНАЯ БУРЯ 🌪️)"
+    try:
+        k = float(kp)
+        if k < 4: return "(спокойно)"
+        if k < 5: return "(небольшие возмущения)"
+        if k < 6: return "(слабая буря ⚠️)"
+        return "(СИЛЬНАЯ БУРЯ 🌪️)"
+    except: return ""
 
 def get_aqi_desc(pm25):
     if pm25 == "нет данных" or pm25 is None: return ""
@@ -86,7 +89,7 @@ def get_belhydromet_context():
         s_feed = feedparser.parse("https://pogoda.by/rss/storm/")
         if s_feed.entries:
             storm_msg = f"{s_feed.entries[0].title}. {s_feed.entries[0].description}"
-            print(f"⚠️ Штормовое сообщение: {storm_msg[:50]}...")
+            print(f"⚠️ Штормовое получено: {storm_msg[:40]}...")
     except Exception as e:
         print(f"❌ Ошибка Белгидромета: {e}")
     return synoptic_3days, storm_msg
@@ -104,25 +107,39 @@ def main():
 
     run_key = f"{current_date_key}_{period}"
     if history.get('last_sent_key') == run_key:
-        print(f"--- Пропуск: прогноз за {period} уже отправлен ---")
+        print(f"--- Пропуск: {period} уже отправлен ---")
         return
 
+    # 1. Основная погода и воздух
     try:
-        print(f"--- Запрос погоды для Пинска ({period})... ---")
+        print(f"--- Запрос данных Пинск ({period})... ---")
         w_res = requests.get(f"https://api.open-meteo.com/v1/forecast?latitude={LAT}&longitude={LON}&current=temperature_2m,relative_humidity_2m,apparent_temperature,surface_pressure,weather_code,wind_speed_10m,wind_direction_10m,cloud_cover,uv_index,precipitation&hourly=temperature_2m,weather_code,wind_speed_10m,precipitation,cloud_cover&daily=sunrise,sunset&timezone=auto", timeout=15)
         w = w_res.json()
-        print("✅ Open-Meteo: OK")
-        
         aq_res = requests.get(f"https://air-quality-api.open-meteo.com/v1/air-quality?latitude={LAT}&longitude={LON}&current=pm2_5", timeout=10)
         pm25 = aq_res.json()['current']['pm2_5']
-        print(f"✅ Воздух PM2.5: {pm25}")
-
-        kp_res = requests.get("https://services.swpc.noaa.gov/products/noaa-estimated-planetary-k-index.json", timeout=10).json()
-        current_kp = float(kp_res[-1][1])
-        print(f"✅ Магнитный фон Kp: {current_kp}")
+        print(f"✅ Погода и воздух: OK (PM2.5: {pm25})")
     except Exception as e:
-        print(f"❌ Ошибка получения данных: {e}")
+        print(f"❌ Ошибка основных данных: {e}")
         return
+
+    # 2. Кп-индекс (Двойной контур)
+    current_kp = "нет данных"
+    try:
+        print("--- Запрос Kp-индекса (Основной: Open-Meteo)... ---")
+        kp_res = requests.get("https://api.open-meteo.com/v1/forecast?latitude=52.52&longitude=13.41&hourly=magnetic_field_k_index", timeout=10)
+        if kp_res.status_code == 200:
+            current_kp = kp_res.json()['hourly']['magnetic_field_k_index'][0]
+            print(f"✅ Kp получен (Open-Meteo): {current_kp}")
+        else: raise Exception("Статус не 200")
+    except:
+        print("⚠️ Open-Meteo Kp недоступен. Пробую Запасной (NOAA)...")
+        try:
+            kp_res = requests.get("https://services.swpc.noaa.gov/products/noaa-estimated-planetary-k-index.json", timeout=10)
+            kp_data = kp_res.json()
+            current_kp = float(kp_data[-1][1])
+            print(f"✅ Kp получен (NOAA): {current_kp}")
+        except Exception as e:
+            print(f"❌ Запасной Kp тоже упал: {e}")
 
     syn_3days, storm_raw = get_belhydromet_context()
     cur = w['current']
@@ -140,7 +157,6 @@ def main():
         history['m'] = current_data
         msg = (f"#прогнозутро\n\n🏙 Пинск сейчас:\n🌡 Температура: {cur['temperature_2m']}°C (ощущ. {cur['apparent_temperature']}°C)\n☁️ Облачность: {clouds}% ({get_weather_desc(cur['weather_code'])})\n💨 Ветер: {wind} км/ч {wind_dir} ({get_wind_power(wind)})\n💧 Влажность: {hum}% {get_humidity_desc(hum)}\n🌧 Осадки: {prec_forecast}\n📈 Давление: {press_mm} мм рт. ст. {get_pressure_desc(press_mm)}\n🧲 Магнитный фон: {current_kp} Kp {get_kp_desc(current_kp)}\n🕒 Световой день: {w['daily']['sunrise'][0][-5:]} — {w['daily']['sunset'][0][-5:]}\n🍃 Воздух: {pm25} PM2.5 {get_aqi_desc(pm25)}\n")
         ai_prompt = f"{role_info} Сегодня {current_date_str}. Пинск: {weather_context}. Сводка РБ на 3 дня: {syn_3days}.Найди в сводке РБ данные на {current_date_str}.Проанализируй все данные. Определи барическую систему и её влияние и опиши физику ощущений для человека на улице. ПРАВИЛА: Штормовое предупреждение (если есть: {storm_raw}) вынеси ОТДЕЛЬНЫМ ПРЕДЛОЖЕНИЕМ В НАЧАЛО с ⚠️. Цифры не используй.Пиши кратко, 1-2 предложения кроме штормового предупреждения.Без вводных слов."
-
     elif period == "day":
         history['d'] = current_data
         m = history.get('m', {})
@@ -148,7 +164,6 @@ def main():
         sunset = datetime.datetime.fromisoformat(w['daily']['sunset'][0]); diff = sunset - now.replace(tzinfo=None)
         msg = (f"#прогноздень\n\n🏙 Пинск сейчас:\n🌡 Температура: {cur['temperature_2m']}°C (ощущ. {cur['apparent_temperature']}°C)\n☁️ Облачность: {clouds}%\n💨 Ветер: {wind} км/ч {wind_dir} ({get_wind_power(wind)})\n💧 Влажность: {hum}% {get_humidity_desc(hum)}\n🌧 Осадки: {prec_forecast}\n🧲 Магнитный фон: {current_kp} Kp {get_kp_desc(current_kp)}\n📈 Давление: {press_mm} мм рт. ст. {get_pressure_desc(press_mm)}\n☀️ УФ-индекс: {cur['uv_index']} {get_uv_desc(cur['uv_index'])}\n🍃 Воздух: {pm25} PM2.5 {get_aqi_desc(pm25)}\n🌇 Закат: через {diff.seconds // 3600} ч. {(diff.seconds // 60) % 60} мин.\n")
         ai_prompt = f"{role_info} Сейчас обед {current_date_str}. Пинск: {weather_context}. Утром было: {history_str}. Сводка РБ: {syn_3days}.Проанализируй все данные. Расскажи есть или нет изменений в атмосфере по сравнению с утром (если есть то какие) на основе сводки РБ.Как изменились ощущения для человека за окном . ПРАВИЛА: Штормовое предупреждение (если есть: {storm_raw}) вынеси ОТДЕЛЬНЫМ ПРЕДЛОЖЕНИЕМ В НАЧАЛО с ⚠️. Цифры не используй.Пиши кратко, 1-2 предложения кроме штормового предупреждения.Без вводных слов."
-
     else:
         d = history.get('d', history.get('m', {}))
         history_str = f"Днем: Т:{d.get('t')}°C, Давл:{d.get('p')}мм, Влаж:{d.get('h')}%, Ветер:{d.get('w')}км/ч {d.get('wd')}"
@@ -159,11 +174,11 @@ def main():
 
     # Каскад ИИ
     ai_success = False
-    print("--- Запуск каскада ИИ-агентов... ---")
+    print("--- Запуск каскада ИИ... ---")
     for api in ["groq", "mistral", "cohere"]:
         try:
             if api == "groq":
-                print("🤖 Пробую Groq (llama-3.3-70b)...")
+                print("🤖 Пробую Groq (llama-3.3-70b-specdec)...")
                 res = requests.post("https://api.groq.com/openai/v1/chat/completions", headers={"Authorization": f"Bearer {os.getenv('GROQ_API_KEY')}"}, json={"model": "llama-3.3-70b-specdec", "messages": [{"role": "user", "content": ai_prompt}]}, timeout=25).json()
                 content = res['choices'][0]['message']['content'].strip()
             elif api == "mistral":
@@ -177,23 +192,20 @@ def main():
 
             msg += f"\n\n{content}"
             ai_success = True
-            print(f"✅ Агент {api} успешно обработал запрос")
+            print(f"✅ Агент {api} OK")
             break
         except Exception as e:
-            print(f"⚠️ Агент {api} упал: {e}")
+            print(f"⚠️ Агент {api} ошибка: {e}")
             continue
-
-    if not ai_success:
-        print("❌ Все ИИ-агенты недоступны!")
 
     print("--- Отправка в Telegram... ---")
     tg_res = requests.post(f"https://api.telegram.org/bot{os.getenv('TELEGRAM_TOKEN')}/sendMessage", json={"chat_id": os.getenv('CHANNEL_ID'), "text": msg, "parse_mode": "Markdown"})
     if tg_res.status_code == 200:
-        print("✅ Сообщение успешно доставлено")
+        print("✅ Успешно доставлено")
         history['last_sent_key'] = run_key
         with open(history_file, 'w') as f: json.dump(history, f)
     else:
-        print(f"❌ Ошибка Telegram: {tg_res.status_code} - {tg_res.text}")
+        print(f"❌ Ошибка Telegram: {tg_res.text}")
 
 if __name__ == "__main__":
     main()
