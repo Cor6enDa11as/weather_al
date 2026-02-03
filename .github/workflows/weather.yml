@@ -3,24 +3,19 @@ name: Pinsk Weather Bot
 on:
   schedule:
     # Время по Минску (UTC+3):
-    # 01:17 UTC = 04:17 Минск
-    # 10:17 UTC = 13:17 Минск
-    # 16:17 UTC = 19:17 Минск
+    # 01:17 UTC = 04:17 Минск (Утро)
+    # 10:17 UTC = 13:17 Минск (День)
+    # 16:17 UTC = 19:17 Минск (Вечер)
     - cron: '17 1,10,16 * * *'
-  workflow_dispatch:
-
-permissions:
-  contents: write
+  workflow_dispatch: # Позволяет запускать вручную для теста
 
 jobs:
-  build:
+  run-bot:
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -30,31 +25,14 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; else pip install requests; fi
 
       - name: Run weather bot
         env:
-          # Новые ключи для стабильной работы
-          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
-          MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
+          # Основные ключи ИИ
           COHERE_API_KEY: ${{ secrets.COHERE_API_KEY }}
-          # Системные ключи
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          # Ключи Telegram
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           CHANNEL_ID: ${{ secrets.CHANNEL_ID }}
         run: python weather_bot.py
-
-      - name: Commit and Push changes
-        run: |
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-
-          git add weather_history.json
-          # Проверяем наличие изменений перед коммитом
-          if git diff --staged --quiet; then
-            echo "--- Изменений в истории нет ---"
-          else
-            git commit -m "Update weather history [skip ci]"
-            git pull --rebase origin main
-            git push origin main
-            echo "--- История успешно сохранена в репозиторий ---"
-          fi

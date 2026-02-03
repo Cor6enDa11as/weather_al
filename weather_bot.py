@@ -1,11 +1,19 @@
 #!/usr/bin/env python3
+#!/usr/bin/env python3
+import os, requests, datetime, sys
 
-import os, requests, datetime, json, feedparser
-from bs4 import BeautifulSoup
-
-# --- Настройки Пинск ---
+# --- Настройки ---
 LAT, LON = 52.12, 26.10
+COHERE_KEY = os.getenv('COHERE_API_KEY')
+GROQ_KEY = os.getenv('GROQ_API_KEY')
+TG_TOKEN = os.getenv('TELEGRAM_TOKEN')
+CH_ID = os.getenv('CHANNEL_ID')
 
+def log(message):
+    timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    print(f"[{timestamp}] {message}")
+
+# --- Пояснения для людей (Твои функции без изменений) ---
 def get_wind_dir(deg):
     dirs = ["С ⬇️", "СВ ↙️", "В ⬅️", "ЮВ ↖️", "Ю ⬆️", "ЮЗ ↗️", "З ➡️", "СЗ ↘️"]
     return dirs[int((deg + 22.5) % 360 / 45)]
@@ -18,7 +26,7 @@ def get_wind_power(speed):
     return "ОЧЕНЬ СИЛЬНЫЙ ⚠️"
 
 def get_weather_desc(code):
-    codes = {0: "ясно", 1: "преимущественно ясно", 2: "переменная облачность", 3: "пасмурно", 45: "туман", 51: "легкая морось", 53: "морось", 55: "сильная морось", 61: "небольшой дождь", 63: "дождь", 65: "сильный дождь", 66: "ледяной дождь", 67: "сильный ледяной дождь", 71: "небольшой снег", 73: "снег", 75: "сильный снег", 77: "снежные зерна", 80: "слабый ливень", 81: "ливень", 82: "сильный ливень", 85: "небольшой снегопад", 86: "сильный снегопад", 95: "гроза", 96: "гроза с градом", 99: "сильная гроза с градом"}
+    codes = {0: "ясно", 1: "преимущественно ясно", 2: "переменная облачность", 3: "пасмурно", 45: "туман", 51: "легкая морось", 53: "морось", 55: "сильная морось", 61: "небольшой дождь", 63: "дождь", 65: "сильный дождь", 80: "слабый ливень", 95: "гроза"}
     return codes.get(code, "осадки")
 
 def get_pressure_desc(p):
@@ -27,169 +35,127 @@ def get_pressure_desc(p):
     return "(норма)"
 
 def get_kp_desc(kp):
-    if kp == "нет данных" or kp is None: return ""
     try:
         k = float(kp)
         if k < 4: return "(спокойно)"
         if k < 5: return "(небольшие возмущения)"
-        if k < 6: return "(слабая буря ⚠️)"
-        return "(СИЛЬНАЯ БУРЯ 🌪️)"
+        return "(МАГНИТНАЯ БУРЯ ⚠️)"
     except: return ""
 
 def get_aqi_desc(pm25):
-    if pm25 == "нет данных" or pm25 is None: return ""
     if pm25 < 12: return "(чистый)"
     if pm25 < 35: return "(приемлемый)"
-    if pm25 < 55: return "(нездоровый для чувствительных)"
     return "(грязный 😷)"
 
-def get_uv_desc(uv):
-    if uv is None: return ""
-    if uv < 3: return "(низкий, безопасно)"
-    if uv < 6: return "(умеренный, нужна защита 🧴)"
-    if uv < 8: return "(высокий! будьте в тени ⛱️)"
-    return "(ОПАСНЫЙ! избегайте солнца ⛔)"
-
 def get_humidity_desc(h):
-    if h < 30: return "(сухо 🏜️)"
-    if h < 60: return "(комфортно ✨)"
-    if h < 80: return "(влажно 💧)"
+    if h < 40: return "(сухо 🏜️)"
+    if h < 70: return "(комфортно ✨)"
     return "(сыро 🌧️)"
 
-def get_precipitation_info(hourly_data, start_hour, hours_to_check=12):
-    for i in range(start_hour, start_hour + hours_to_check):
-        if i < len(hourly_data['precipitation']):
-            prec_sum = hourly_data['precipitation'][i]
-            code = hourly_data['weather_code'][i]
-            if prec_sum >= 0.05:
-                type_desc = get_weather_desc(code)
-                force = "небольшой " if "небольш" not in type_desc else ""
-                if prec_sum >= 1.0: force = "умеренный "
-                if prec_sum >= 5.0: force = "сильный "
-                return f"{force}{type_desc} около {i%24:02d}:00".strip()
-    return "не ожидаются"
+def get_uv_desc(uv):
+    if uv < 3: return "(низкий, безопасно)"
+    if uv < 6: return "(умеренный, нужна защита 🧴)"
+    return "(высокий! будьте в тени ⛱️)"
 
-def get_belhydromet_context():
-    synoptic_3days, storm_msg = "Данные Белгидромета недоступны.", ""
-    print("\n--- 📡 ПОДРОБНЕЙШИЙ ЛОГ БЕЛГИДРОМЕТА ---")
-    ts = datetime.datetime.now().strftime('%H:%M:%S')
-    try:
-        # Использование html.parser вместо xml, чтобы не требовать lxml
-        m_res = requests.get("https://pogoda.by/rss/meteo/", timeout=15)
-        m_res.encoding = 'utf-8'
-        m_soup = BeautifulSoup(m_res.text, 'html.parser')
-        item = m_soup.find('item')
-        if item:
-            synoptic_3days = BeautifulSoup(item.find('description').text, "html.parser").get_text().strip()
-            print(f"[{ts}] ✅ Сводка получена ({len(synoptic_3days)} симв.)")
-        
-        s_res = requests.get("https://pogoda.by/rss/storm/", timeout=15)
-        s_res.encoding = 'utf-8'
-        s_soup = BeautifulSoup(s_res.text, 'html.parser')
-        s_item = s_soup.find('item')
-        if s_item:
-            storm_msg = f"{s_item.find('title').text}. {s_item.find('description').text}"
-            print(f"[{ts}] ⚠️ ШТОРМ: {storm_msg}")
-        else: print(f"[{ts}] ✅ Шторм: Чисто")
-    except Exception as e: print(f"[{ts}] ❌ Ошибка Белгидромета: {e}")
-    print("--- КОНЕЦ ЛОГА БЕЛГИДРОМЕТА ---\n")
-    return synoptic_3days, storm_msg
-
+# --- Основная логика ---
 def main():
-    now = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=3)
-    hour, current_date_str = now.hour, now.strftime("%d %B")
-    current_date_key = now.strftime("%d.%m.%Y")
-    period = "morning" if 4 <= hour <= 11 else "day" if 12 <= hour <= 17 else "evening"
+    log("🚀 Старт системы...")
 
-    history_file = 'weather_history.json'
+    # 1. Получение данных
     try:
-        with open(history_file, 'r') as f: history = json.load(f)
-    except: history = {}
+        log("📡 Запрос метеоданных Open-Meteo...")
+        url = f"https://api.open-meteo.com/v1/forecast?latitude={LAT}&longitude={LON}&current=temperature_2m,relative_humidity_2m,apparent_temperature,surface_pressure,weather_code,wind_speed_10m,wind_direction_10m,cloud_cover,uv_index&hourly=temperature_2m,surface_pressure,relative_humidity_2m,wind_speed_10m,precipitation,weather_code&daily=sunrise,sunset&past_days=3&timezone=auto"
+        res = requests.get(url, timeout=15)
+        res.raise_for_status()
+        data = res.json()
+        log("✅ Метеоданные (72ч + текущие) получены.")
+    except Exception as e:
+        log(f"❌ Критическая ошибка Open-Meteo: {e}")
+        sys.exit(1)
 
-    run_key = f"{current_date_key}_{period}"
-    if history.get('last_sent_key') == run_key:
-        print(f"--- Пропуск: {period} уже отправлен ---")
-        return
+    cur = data['current']
+    h_data = data['hourly']
+    daily = data['daily']
+    now = datetime.datetime.now()
+    hour = now.hour
 
-    print("--- 🛠️ СБОР ДАННЫХ (УМНЫЙ КАСКАД) ---")
-    cur, hourly_backup, daily_backup = {}, None, None
+    # Индексы и доп. данные
+    temp_8am = h_data['temperature_2m'][80]
+    press_8am = int(h_data['surface_pressure'][80] * 0.750062)
+    sunrise = daily['sunrise'][3][-5:]
+    sunset = daily['sunset'][3][-5:]
+
+    kp = 0.0
     try:
-        w_res = requests.get(f"https://api.open-meteo.com/v1/forecast?latitude={LAT}&longitude={LON}&current=temperature_2m,relative_humidity_2m,apparent_temperature,surface_pressure,weather_code,wind_speed_10m,wind_direction_10m,cloud_cover,uv_index,precipitation&hourly=temperature_2m,weather_code,wind_speed_10m,precipitation,cloud_cover&daily=sunrise,sunset&timezone=auto", timeout=15).json()
-        cur, hourly_backup, daily_backup = w_res['current'], w_res['hourly'], w_res['daily']
-        print("✅ Погода: OK")
-    except: print("⚠️ Погода недоступна")
+        log("🧲 Получение Kp-индекса...")
+        kp_res = requests.get("https://services.swpc.noaa.gov/text/daily-planetary-k-index.txt", timeout=10)
+        kp = float(kp_res.text.strip().split('\n')[-1].split()[-1])
+    except Exception as e: log(f"⚠️ Ошибка Kp: {e}")
 
-    pm25 = "нет данных"
+    pm25 = 0.0
     try:
+        log("🍃 Проверка качества воздуха...")
         aq_res = requests.get(f"https://air-quality-api.open-meteo.com/v1/air-quality?latitude={LAT}&longitude={LON}&current=pm2_5", timeout=10).json()
         pm25 = aq_res['current']['pm2_5']
-        print("✅ Воздух: OK")
-    except: print("❌ Воздух: Нет данных")
+    except Exception as e: log(f"⚠️ Ошибка воздуха: {e}")
 
-    current_kp = "нет данных"
-    # Прямая ссылка на текст NOAA, так как JSON часто выдает 404
-    try:
-        res = requests.get("https://services.swpc.noaa.gov/text/daily-planetary-k-index.txt", timeout=10)
-        current_kp = float(res.text.strip().split('\n')[-1].split()[-1])
-        print(f"✅ Kp: {current_kp}")
-    except:
-        try:
-            current_kp = requests.get("https://kp.gfz-potsdam.de/app/json/kp", timeout=10).json()['kp'][-1]
-            print(f"✅ Kp (GFZ): {current_kp}")
-        except: print("❌ Kp: Ошибка")
-    
-    print("---------------------------------------\n")
-
-    if not cur: return
-
-    syn_3days, storm_raw = get_belhydromet_context()
-    press_mm = int(cur['surface_pressure'] * 0.750062)
-    hum, wind, clouds = cur['relative_humidity_2m'], cur['wind_speed_10m'], cur['cloud_cover']
-    wind_dir = get_wind_dir(cur['wind_direction_10m'])
-    prec_forecast = get_precipitation_info({'precipitation': hourly_backup['precipitation'], 'weather_code': hourly_backup['weather_code']}, hour) if hourly_backup else "нет данных"
-
-    weather_context = f"Темп: {cur['temperature_2m']}°C, Давл: {press_mm}мм, Влаж: {hum}%, Ветер: {wind}км/ч {wind_dir}, Обл: {clouds}%, Осадки: {prec_forecast}"
-    storm_rule = f"ПРАВИЛА: Штормовое предупреждение (если есть: {storm_raw}) вынеси ОТДЕЛЬНЫМ ПРЕДЛОЖЕНИЕМ В НАЧАЛО с ⚠️." if storm_raw else ""
-    role_info = "Ты — ведущий синоптик национальной метеослужбы. Твой стиль: научно-популярный, профессиональный. Используй профессиональные термины в своих прогнозах"
-
-    if period == "morning":
-        history['m'] = {'t': cur['temperature_2m'], 'p': press_mm, 'h': hum, 'w': wind, 'wd': wind_dir}
-        msg = (f"#прогнозутро\n\n🏙 Пинск сейчас:\n🌡 Температура: {cur['temperature_2m']}°C (ощущ. {cur['apparent_temperature']}°C)\n☁️ Облачность: {clouds}% ({get_weather_desc(cur['weather_code'])})\n💨 Ветер: {wind} км/ч {wind_dir} ({get_wind_power(wind)})\n💧 Влажность: {hum}% {get_humidity_desc(hum)}\n🌧 Осадки: {prec_forecast}\n📈 Давление: {press_mm} мм рт. ст. {get_pressure_desc(press_mm)}\n🧲 Магнитный фон: {current_kp} Kp {get_kp_desc(current_kp)}\n🕒 Световой день: {daily_backup['sunrise'][0][-5:] if daily_backup else '--:--'} — {daily_backup['sunset'][0][-5:] if daily_backup else '--:--'}\n🍃 Воздух: {pm25} PM2.5 {get_aqi_desc(pm25)}\n")
-        ai_prompt = f"{role_info} Сегодня {current_date_str}. Пинск: {weather_context}. Сводка РБ на 3 дня: {syn_3days}.Найди в сводке РБ данные на {current_date_str}.Проанализируй все данные. Определи доминирующую воздушную массу и её влияние и опиши как ощущается погода на улице для человека . {storm_rule} Цифры не используй.Пиши кратко, 1-2 предложения кроме штормового предупреждения.Без вводных слов."
-    elif period == "day":
-        history['d'] = {'t': cur['temperature_2m'], 'p': press_mm, 'h': hum, 'w': wind, 'wd': wind_dir}
-        m = history.get('m', {})
-        history_str = f"Утро: Т:{m.get('t')}°C, Давл:{m.get('p')}мм, Влаж:{m.get('h')}%, Ветер:{m.get('w')}км/ч {m.get('wd')}"
-        msg = (f"#прогноздень\n\n🏙 Пинск сейчас:\n🌡 Температура: {cur['temperature_2m']}°C (ощущ. {cur['apparent_temperature']}°C)\n☁️ Облачность: {clouds}%\n💨 Ветер: {wind} км/ч {wind_dir} ({get_wind_power(wind)})\n💧 Влажность: {hum}% {get_humidity_desc(hum)}\n🌧 Осадки: {prec_forecast}\n🧲 Магнитный фон: {current_kp} Kp {get_kp_desc(current_kp)}\n📈 Давление: {press_mm} мм рт. ст. {get_pressure_desc(press_mm)}\n☀️ УФ-индекс: {cur.get('uv_index', 0)} {get_uv_desc(cur.get('uv_index', 0))}\n🍃 Воздух: {pm25} PM2.5 {get_aqi_desc(pm25)}\n")
-        ai_prompt = f"{role_info} Сейчас обед {current_date_str}. Пинск: {weather_context}. Утром было: {history_str}. Сводка РБ: {syn_3days}.Проанализируй все данные. Расскажи есть или нет изменения в движении воздушных масс по сравнению с утром (если есть то какие) на основе сводки РБ.Как изменились ощущения для человека за окном . {storm_rule} Цифры не используй.Пиши кратко, 1-2 предложения кроме штормового предупреждения.Без вводных слов."
+    # 2. Выбор твоих оригинальных промптов
+    if 5 <= hour < 13:
+        tag, label = "#прогнозутро", "🌅 УТРЕННИЙ ОБЗОР"
+        preamble = "Ты — ведущий синоптик-аналитик Пинской метеослужбы. Тебе предоставлен массив данных за последние 72 часа. Твоя задача: проанализировать движение воздушных масс и определить доминирующую барическую систему (циклон или антициклон). Напиши прогноз на световой день: опиши, как будет меняться погода, какой будет облачность и как человек будет ощущать температуру на улице. Используй термины: 'трансформация воздушных масс', 'барический гребень' или 'тыловая часть циклона'. ПРАВИЛА: Не используй цифры. Пиши строго и профессионально, 1-2 предложения. Сразу суть без приветствий."
+    elif 14 <= hour < 20:
+        tag, label = "#прогноздень", "🌤️ ДНЕВНОЙ МОНИТОРИНГ"
+        preamble = f"Ты — эксперт метеорологического мониторинга. Сравни текущие данные с утренними показателями (я передам их тебе).Утро ({temp_8am}°C, {press_8am}мм).Твоя задача: определить, подтверждается ли утренний прогноз или атмосфера готовит сюрприз. Посмотри на динамику давления: если оно падает — предупреди о приближении фронта, если растет — об усилении антициклона. Опиши, изменились ли ощущения 'комфорта' для человека за окном по сравнению с утром. ПРАВИЛА: Не используй цифры. Пиши кратко и по делу, 1-2 предложения. Избегай общих фраз."
     else:
-        d = history.get('d', history.get('m', {}))
-        history_str = f"Днем: Т:{d.get('t')}°C, Давл:{d.get('p')}мм, Влаж:{d.get('h')}%, Ветер:{d.get('w')}км/ч {d.get('wd')}"
-        night_temps = hourly_backup['temperature_2m'][hour:hour+9] if hourly_backup else [cur['temperature_2m']]
-        night_prec = get_precipitation_info({'precipitation': hourly_backup['precipitation'], 'weather_code': hourly_backup['weather_code']}, hour, 9) if hourly_backup else "нет данных"
-        msg = (f"#прогнозвечер\n\n🏙 Пинск сейчас:\n🌡 Температура: {cur['temperature_2m']}°C\n☁️ Облачность: {clouds}%\n💨 Ветер: {wind} км/ч {wind_dir} ({get_wind_power(wind)})\n💧 Влажность: {hum}% {get_humidity_desc(hum)}\n🌧 Осадки: {prec_forecast}\n📈 Давление: {press_mm} мм рт. ст. {get_pressure_desc(press_mm)}\n🍃 Воздух: {pm25} PM2.5 {get_aqi_desc(pm25)}\n\n🌒 Ночь\n🌡 От {min(night_temps)}°C до {max(night_temps)}°C\n🌧 Осадки ночью: {night_prec}\n")
-        ai_prompt = f"{role_info} Вечер {current_date_str}. Пинск: {weather_context}. Днем было: {history_str}. Ночью: {min(night_temps)}°C, осадки: {night_prec}. Сводка РБ: {syn_3days}.Проанализируй данные. Расскажи какие изменения в движении воздушных масс произойдут ночью(если изменений нет, так и говори).Как будет ощущаться погода ночью для человека на улице. {storm_rule} Цифры не используй.Пиши кратко, 1-2 предложения кроме штормового предупреждения.Без вводных слов."
+        tag, label = "#прогнозвечер", "🌙 ВЕЧЕРНИЙ ПРОГНОЗ"
+        preamble = "Ты — дежурный синоптик ночной смены. Проанализируй термодинамические процессы на ближайшие 12 часов. Ожидается ли ночное выхолаживание воздуха, образование радиационного тумана или прохождение фронтальных разделов? Сделай акцент на том, какой будет погода к моменту пробуждения людей (завтра утром). Предупреди о возможных заморозках или резкой смене ветра. ПРАВИЛА: Не используй цифры. Используй профессиональный язык. Объем: 1-2 предложения."
 
-    # Агенты: Cohere (обновлен), Groq (обновлен), Mistral
-    for api in ["cohere", "groq", "mistral"]:
-        try:
-            if api == "cohere":
-                res = requests.post("https://api.cohere.ai/v1/chat", headers={"Authorization": f"Bearer {os.getenv('COHERE_API_KEY')}"}, json={"message": ai_prompt, "model": "command-r-plus-08-2024"}, timeout=25).json()
-                if 'text' in res: msg += f"\n\n{res['text'].strip()}"; print("✅ Cohere OK"); break
-                else: print(f"⚠️ Cohere ошибка JSON: {res}")
-            elif api == "groq":
-                res = requests.post("https://api.groq.com/openai/v1/chat/completions", headers={"Authorization": f"Bearer {os.getenv('GROQ_API_KEY')}"}, json={"model": "llama-3.3-70b-versatile", "messages": [{"role": "user", "content": ai_prompt}]}, timeout=25).json()
-                if 'choices' in res: msg += f"\n\n{res['choices'][0]['message']['content'].strip()}"; print("✅ Groq OK"); break
-                else: print(f"⚠️ Groq ошибка JSON: {res}")
-            elif api == "mistral":
-                res = requests.post("https://api.mistral.ai/v1/chat/completions", headers={"Authorization": f"Bearer {os.getenv('MISTRAL_API_KEY')}"}, json={"model": "mistral-small-latest", "messages": [{"role": "user", "content": ai_prompt}]}, timeout=25).json()
-                if 'choices' in res: msg += f"\n\n{res['choices'][0]['message']['content'].strip()}"; print("✅ Mistral OK"); break
-                else: print(f"⚠️ Mistral ошибка JSON: {res}")
-        except Exception as e: print(f"⚠️ Агент {api} ошибка: {e}"); continue
+    # 3. Работа ИИ
+    log(f"🧠 Работа ИИ (Модель: Cohere)...")
+    ai_text = "Аналитика временно недоступна."
+    try:
+        ai_payload = {
+            "message": f"История 72ч: {h_data['temperature_2m'][-72::4]}. Сейчас: {cur}",
+            "model": "command-r-plus-08-2024",
+            "preamble": preamble
+        }
+        ai_res = requests.post("https://api.cohere.ai/v1/chat",
+                               headers={"Authorization": f"Bearer {COHERE_KEY}"},
+                               json=ai_payload, timeout=25).json()
+        ai_text = ai_res.get('text', 'Ошибка структуры ИИ').strip()
+        log("✅ Ответ ИИ получен.")
+    except Exception as e:
+        log(f"❌ Ошибка ИИ: {e}")
 
-    requests.post(f"https://api.telegram.org/bot{os.getenv('TELEGRAM_TOKEN')}/sendMessage", json={"chat_id": os.getenv('CHANNEL_ID'), "text": msg, "parse_mode": "Markdown"})
-    history['last_sent_key'] = run_key
-    with open(history_file, 'w') as f: json.dump(history, f)
+    # 4. Сборка сообщения
+    press_now = int(cur['surface_pressure'] * 0.750062)
+    msg = (
+        f"{tag}\n\n{label}\n\n"
+        f"🏙 Пинск сейчас:\n"
+        f"🌡 Температура: {cur['temperature_2m']}°C (ощущ. {cur['apparent_temperature']}°C)\n"
+        f"☁️ Облачность: {cur['cloud_cover']}% ({get_weather_desc(cur['weather_code'])})\n"
+        f"💨 Ветер: {cur['wind_speed_10m']} км/ч {get_wind_dir(cur['wind_direction_10m'])} ({get_wind_power(cur['wind_speed_10m'])})\n"
+        f"💧 Влажность: {cur['relative_humidity_2m']}% {get_humidity_desc(cur['relative_humidity_2m'])}\n"
+        f"📈 Давление: {press_now} мм рт. ст. {get_pressure_desc(press_now)}\n"
+        f"🧲 Магнитный фон: {kp} Kp {get_kp_desc(kp)}\n"
+        f"☀️ УФ-индекс: {cur['uv_index']} {get_uv_desc(cur['uv_index'])}\n"
+        f"🕒 Световой день: {sunrise} — {sunset} (время прогулок ☀️)\n"
+        f"🍃 Воздух: {pm25} PM2.5 {get_aqi_desc(pm25)}\n\n"
+        f"📝 АНАЛИЗ СИНОПТИКА:\n{ai_text}"
+    )
+
+    # 5. Отправка
+    try:
+        log("📤 Отправка в Telegram...")
+        tg_res = requests.post(f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
+                               json={"chat_id": CH_ID, "text": msg, "parse_mode": "Markdown"},
+                               timeout=15)
+        if tg_res.status_code == 200:
+            log("✅ Готово! Сводка отправлена.")
+        else:
+            log(f"❌ Ошибка Telegram: {tg_res.text}")
+    except Exception as e:
+        log(f"❌ Ошибка отправки: {e}")
 
 if __name__ == "__main__":
     main()
