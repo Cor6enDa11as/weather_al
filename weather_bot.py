@@ -205,7 +205,7 @@ def main():
     for api in ["cohere", "groq", "mistral"]:
         try:
             if api == "cohere":
-                res = requests.post("https://api.cohere.ai/v1/chat", headers={"Authorization": f"Bearer {os.getenv('COHERE_API_KEY')}"}, json={"message": ai_prompt, "model": "command-r-plus"}, timeout=25).json()
+                res = requests.post("https://api.cohere.ai/v1/chat", headers={"Authorization": f"Bearer {os.getenv('COHERE_API_KEY')}"}, json={"message": ai_prompt, "model": "command-r-plus-08-2024"}, timeout=25).json()
                 if 'text' in res:
                     msg += f"\n\n{res['text'].strip()}"; print("✅ Cohere OK"); break
                 else: print(f"⚠️ Cohere ошибка JSON: {res}")
