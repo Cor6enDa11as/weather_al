@@ -106,7 +106,6 @@ def main():
     log("🚀 Старт системы...")
     try:
         log("📡 Запрос метеоданных (включая ливни и снег)...")
-        # Добавлены showers и snowfall для ловли снежных зарядов
         url = (f"https://api.open-meteo.com/v1/forecast?latitude={LAT}&longitude={LON}"
                f"&current=temperature_2m,relative_humidity_2m,apparent_temperature,surface_pressure,weather_code,wind_speed_10m,wind_direction_10m,wind_gusts_10m,cloud_cover,uv_index,visibility,dew_point_2m"
                f"&hourly=temperature_2m,surface_pressure,relative_humidity_2m,wind_speed_10m,wind_gusts_10m,precipitation,showers,snowfall,weather_code,visibility,soil_temperature_0cm"
@@ -125,12 +124,10 @@ def main():
     now = datetime.datetime.utcnow() + datetime.timedelta(hours=3)
     hour = now.hour
 
-    # --- Улучшенная логика осадков (учитываем ливни и коды погоды) ---
     precip_info = "без осадков"
     for i in range(hour, hour + 18):
         if i < len(h_data['precipitation']):
             w_code_h = h_data['weather_code'][i]
-            # Суммируем все виды осадков для точности
             total_v = h_data['precipitation'][i] + h_data['showers'][i] + h_data['snowfall'][i]
             if total_v > 0 or w_code_h >= 51:
                 p_time = f"{i % 24:02d}:00"
@@ -138,13 +135,11 @@ def main():
                 precip_info = f"{p_type} ожидается около {p_time}"
                 break
 
-    # --- Прогноз магнитных бурь (Текущее + на 3 часа вперед) ---
     kp_now = 0.0
     kp_future = 0.0
     try:
         kp_res = requests.get("https://services.swpc.noaa.gov/products/noaa-scales.json", timeout=10).json()
         kp_now = float(kp_res['0']['mag_eff']['kp']) if '0' in kp_res else float(kp_res[0]['kp'])
-        # Берем прогноз на следующий временной слот (обычно +3 часа)
         if '1' in kp_res: kp_future = float(kp_res['1']['mag_eff']['kp'])
         elif len(kp_res) > 1: kp_future = float(kp_res[1]['kp'])
     except: pass
@@ -153,11 +148,11 @@ def main():
     gusts = cur.get('wind_gusts_10m', 0)
     temp = cur['temperature_2m']
     w_code = cur['weather_code']
+    soil_temp = h_data['soil_temperature_0cm'][hour]
 
     if gusts >= 90: danger_alerts.append("🚨 **КРАСНЫЙ УРОВЕНЬ:** Ураганный ветер! (90+ км/ч)")
     elif gusts >= 54: danger_alerts.append("🟠 **ОРАНЖЕВЫЙ УРОВЕНЬ:** Сильный ветер/порывы! (54+ км/ч)")
 
-    # Алерт по бурям (с учетом прогноза)
     max_kp = max(kp_now, kp_future)
     if max_kp >= 8: danger_alerts.append(f"🚨 **КРАСНЫЙ УРОВЕНЬ:** Экстремальный магнитный шторм! (Kp {max_kp})")
     elif max_kp >= 6: danger_alerts.append(f"🟠 **ОРАНЖЕВЫЙ УРОВЕНЬ:** Сильная магнитная буря! (Kp {max_kp})")
@@ -165,11 +160,15 @@ def main():
 
     if temp >= 35 or temp <= -35: danger_alerts.append(f"🚨 **КРАСНЫЙ УРОВЕНЬ:** Экстремальная температура! ({temp}°C)")
     elif temp >= 30 or temp <= -25: danger_alerts.append(f"🟠 **ОРАНЖЕВЫЙ УРОВЕНЬ:** Опасная температура! ({temp}°C)")
-    if w_code in [66, 67]: danger_alerts.append("🟠 **ОРАНЖЕВЫЙ УРОВЕНЬ:** Сильный гололёд (ледяной дождь)!")
-    elif temp < 0 and (max(h_data['temperature_2m'][hour-3:hour]) > 0 or sum(h_data['precipitation'][hour-3:hour]) > 0):
-        danger_alerts.append("🟠 **ОРАНЖЕВЫЙ УРОВЕНЬ:** Гололедица на дорогах!")
 
-    # Твои промпты
+    # --- Улучшенный блок гололёда и гололедицы ---
+    if w_code in [66, 67]:
+        danger_alerts.append("🟠 **ОРАНЖЕВЫЙ УРОВЕНЬ:** Сильный гололёд (ледяной дождь)!")
+    elif temp < 1 and (soil_temp < 0 or max(h_data['temperature_2m'][hour-6:hour]) > 0):
+        # Если была влага за последние 6 часов (осадки или код погоды)
+        if sum(h_data['precipitation'][hour-6:hour]) > 0 or w_code >= 51:
+            danger_alerts.append("🟠 **ОРАНЖЕВЫЙ УРОВЕНЬ:** Гололедица на дорогах (скользко)! ⛸️")
+
     temp_8am = h_data['temperature_2m'][80]
     press_8am = int(h_data['surface_pressure'][80] * 0.750062)
 
@@ -184,7 +183,7 @@ def main():
         preamble = "Ты — дежурный синоптик ночной смены.Твоя задача: проанализировать данные  и на основе их рассказать о движение воздушных масс и погоде , определить какие изменения(или нет изменений) будут ночью.Если текущая барическая система имеет имя, присвоенное Свободным университетом Берлина (немецкие метеорологи), обязательно используй его в анализе. Сделай акцент на том, какой будет погода утром и как она будет ощущаться (завтра утром). Предупреди о возможных резких изменениях погоды(если они есть).ПРАВИЛА: Не используй цифры. Используй профессиональный язык. Объем: 1-2 предложения."
 
     log("🧠 Работа ИИ (Cohere)...")
-    ai_input = f"History: {h_data['temperature_2m'][-72::4]}. Current: {cur}. Forecast Kp: {kp_future}."
+    ai_input = f"Current: {cur}. SoilTemp: {soil_temp}. Alerts: {danger_alerts}. Kp Forecast: {kp_future}."
     ai_text = ask_ai_cascade(ai_input, preamble)
 
     press_now = int(cur['surface_pressure'] * 0.750062)
