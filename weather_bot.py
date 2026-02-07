@@ -69,14 +69,14 @@ def ask_ai_cascade(prompt_msg, system_preamble):
             res = requests.post("https://api.cohere.ai/v1/chat",
                                 headers={"Authorization": f"Bearer {COHERE_KEY}"},
                                 json={"message": prompt_msg, "model": "command-r-plus-08-2024", "preamble": system_preamble},
-                                timeout=20).json()
+                                timeout=60).json()
             if 'text' in res: return res['text'].strip()
         except: pass
     if GEMINI_KEY:
         try:
             url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key={GEMINI_KEY}"
             payload = {"contents": [{"parts": [{"text": f"{system_preamble}\n\nData: {prompt_msg}"}]}]}
-            res = requests.post(url, json=payload, timeout=20).json()
+            res = requests.post(url, json=payload, timeout=90).json()
             if 'candidates' in res: return res['candidates'][0]['content']['parts'][0]['text'].strip()
         except: pass
     if MISTRAL_KEY:
@@ -173,7 +173,7 @@ def main():
     temp_8am = h_data['temperature_2m'][80]
     press_8am = int(h_data['surface_pressure'][80] * 0.750062)
 
-    if 5 <= hour < 13:
+    if 5 <= hour < 14:
         tag, label = "🌅", "#прогнозутро"
         preamble = "Ты — ведущий синоптик-аналитик Пинской метеослужбы. Тебе предоставлен массив данных. Твоя задача: проанализировать данные и определить доминирующую воздушную массу и какое она оказывает влияние. (Если текущая барическая система имеет имя, присвоенное Свободным университетом Берлина (немецкие метеорологи), обязательно используй его в анализе).Исходя из данных напиши как будет меняться погода в ближайшее время(или не будет меняться), сделай акцент на сегодняшний день, опиши какие ощущения будут на улице.Предупреди о возможных резких изменениях погоды(если они есть). Используй профессиональные термины. ПРАВИЛА: Не используй цифры. Пиши строго и профессионально, 2-3 предложения. Сразу суть без приветствий."
     elif 14 <= hour < 20:
