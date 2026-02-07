@@ -125,15 +125,30 @@ def main():
     hour = now.hour
 
     # --- Сверхчувствительная логика осадков ---
+    # --- Обновленная логика осадков с правильной грамматикой ---
     precip_info = "без осадков"
     for i in range(hour, hour + 12):
         if i < len(h_data['precipitation']):
             w_code_h = h_data['weather_code'][i]
             total_v = h_data['precipitation'][i] + h_data['showers'][i] + h_data['snowfall'][i]
+
             if total_v > 0.01 or w_code_h >= 51:
                 p_time = f"{i % 24:02d}:00"
                 p_type = get_weather_desc(w_code_h)
-                prefix = "небольшой " if total_v < 0.2 else ""
+
+                # Согласование мужского и женского рода
+                if total_v < 0.2:
+                    # Проверяем слова женского рода
+                    if any(word in p_type for word in ["морось", "гроза"]):
+                        prefix = "небольшая "
+                    # Если это "ясно" или "пасмурно", приставка не нужна
+                    elif any(word in p_type for word in ["ясно", "пасмурно"]):
+                        prefix = ""
+                    else:
+                        prefix = "небольшой "
+                else:
+                    prefix = ""
+
                 precip_info = f"{prefix}{p_type} ожидается около {p_time}"
                 break
 
