@@ -78,7 +78,7 @@ def ask_ai_cascade(prompt_msg, system_preamble):
     if GEMINI_KEY:
         try:
             log("🤖 [AI LOG] Попытка №1: Gemini 3 Flash (Основной)...")
-            url = f"https://generativelanguage.googleapis.com/v1/models/gemini-3-preview:generateContent?key={GEMINI_KEY}"
+            url = f"https://generativelanguage.googleapis.com/v1/models/gemini-3-flash-preview:generateContent?key={GEMINI_KEY}"
             payload = {"contents": [{"parts": [{"text": f"{system_preamble}\n\nДанные: {prompt_msg}"}]}]}
             res = requests.post(url, json=payload, timeout=90)
 
@@ -200,7 +200,7 @@ def main():
     if t_res.status_code == 200: log("✅ [Belgidromet Log] Сводка отправлена.")
 
     # --- СТРАТЕГИЯ НА 3 ДНЯ (СР и ВС вечер) ---
-    if hour >= 20 and dow in [2, 6]:
+    if hour >= 20 or hour < 5 and dow in [2, 6]:
         log("🗓 [Belgidromet Log] Формирование прогноза на 3 дня...")
         day_blocks = []
         for i in range(4, 7):
