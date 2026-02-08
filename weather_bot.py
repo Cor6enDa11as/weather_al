@@ -13,21 +13,24 @@ def log(message):
     timestamp = now_pinsk.strftime('%Y-%m-%d %H:%M:%S')
     print(f"[{timestamp}] {message}")
 
+# --- Функции пояснения (Твой Золотой Стандарт) ---
 def get_wind_dir(deg):
     dirs = ["С ⬇️", "СВ ↙️", "В ⬅️", "ЮВ ↖️", "Ю ⬆️", "ЮЗ ↗️", "З ➡️", "СЗ ↘️"]
     return dirs[int((deg + 22.5) % 360 / 45)]
 
+def get_wind_power(speed):
+    if speed < 5: return "штиль 💨"
+    if speed < 12: return "слабый 🍃"
+    if speed < 29: return "умеренный 🌬️"
+    if speed < 50: return "сильный 🌪️"
+    return "ОЧЕНЬ СИЛЬНЫЙ ⚠️"
+
 def get_weather_desc(code):
     codes = {
         0: "ясно", 1: "преимущественно ясно", 2: "переменная облачность", 3: "пасмурно",
-        45: "туман", 48: "туман с инеем",
-        51: "легкая морось", 53: "морось", 55: "плотная морось",
-        61: "небольшой дождь", 63: "умеренный дождь", 65: "сильный дождь",
-        66: "ледяной дождь ⛸", 67: "сильный ледяной дождь ⛸",
-        71: "небольшой снег", 73: "снег", 75: "сильный снег ❄️",
-        77: "снежные зерна", 80: "ливневый дождь", 81: "сильный ливень", 82: "экстремальный ливень",
-        85: "небольшой снежный ливень", 86: "сильный снежный ливень",
-        95: "дождь с грозой ⛈", 96: "гроза со слабым градом", 99: "сильная гроза с градом ⛈⚠️"
+        45: "туман", 48: "туман с инеем", 51: "легкая морось", 53: "морось", 55: "сильная морось",
+        61: "небольшой дождь", 63: "дождь", 65: "сильный дождь", 66: "ледяной дождь ⛸",
+        71: "снег", 75: "сильный снег ❄️", 80: "ливень", 95: "гроза ⛈"
     }
     return codes.get(code, "осадки")
 
@@ -36,135 +39,173 @@ def get_pressure_desc(p):
     if p > 755: return "(повышенное 📈)"
     return "(норма)"
 
-def get_humidity_desc(h, temp):
-    if h < 30: return "(сухо 🏜️)"
-    if h > 75:
-        return "(сыро/холод ❄️)" if temp < 5 else "(влажно/душно 💦)"
-    return "(комфортно ✨)"
+def get_kp_desc(kp):
+    try:
+        k = float(kp)
+        if k < 3: return "(спокойно)"
+        if k < 4: return "(слабые возмущения 🟡)"
+        if k < 5: return "(небольшие возмущения 🟠)"
+        return "(МАГНИТНАЯ БУРЯ ⚠️)"
+    except: return ""
+
+def get_aqi_desc(pm25):
+    if pm25 < 12: return "(чистый)"
+    if pm25 < 35: return "(приемлемый)"
+    return "(грязный 😷)"
 
 def get_uv_desc(uv):
-    if uv < 3: return "(низкий 🟢)"
-    if uv < 6: return "(средний 🟡)"
-    return "(высокий 🔴)"
+    if uv <= 2: return "Низкий ✅"
+    if uv <= 5: return "Средний 🧴"
+    return "Высокий 🔴"
 
+def get_humidity_desc(h, temp):
+    if h < 30: return "(сухо 🏜️)"
+    if h > 70:
+        return "(сыро/пронизывающий холод ❄️)" if temp < 5 else "(влажно/душно 💦)"
+    return "(комфортно ✨)"
+
+def get_visibility_desc(v_m):
+    v_km = v_m / 1000
+    if v_km < 1: return f"{v_km} км (туман 🌫)"
+    if v_km < 4: return f"{v_km} км (дымка 🌫)"
+    return f"{v_km} км (чисто ✨)"
+
+# --- Каскад ИИ агентов ---
 def ask_ai_cascade(prompt_msg, system_preamble):
+    log("📝 [Belgidromet Log] Анализ каскада ИИ...")
     if COHERE_KEY:
         try:
+            log("🤖 [Belgidromet Log] Агент: Cohere...")
             res = requests.post("https://api.cohere.ai/v1/chat",
                                 headers={"Authorization": f"Bearer {COHERE_KEY}"},
                                 json={"message": prompt_msg, "model": "command-r-plus-08-2024", "preamble": system_preamble},
-                                timeout=40)
-            data = res.json()
-            if res.status_code == 200 and 'text' in data: return data['text'].strip()
-        except: pass
+                                timeout=60).json()
+            if 'text' in res: return res['text'].strip()
+        except Exception as e: log(f"⚠️ [Belgidromet Log] Cohere error: {e}")
     if GEMINI_KEY:
         try:
+            log("🤖 [Belgidromet Log] Агент: Gemini 3 Flash...")
             url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash:generateContent?key={GEMINI_KEY}"
             payload = {"contents": [{"parts": [{"text": f"{system_preamble}\n\nДанные: {prompt_msg}"}]}]}
-            res = requests.post(url, json=payload, timeout=90)
-            data = res.json()
-            if res.status_code == 200 and 'candidates' in data: return data['candidates'][0]['content']['parts'][0]['text'].strip()
-        except: pass
+            res = requests.post(url, json=payload, timeout=90).json()
+            if 'candidates' in res: return res['candidates'][0]['content']['parts'][0]['text'].strip()
+        except Exception as e: log(f"⚠️ [Belgidromet Log] Gemini error: {e}")
     return "Аналитика сейчас недоступна."
 
 def main():
-    log("🚀 Запуск основной логики...")
+    log("🚀 [Belgidromet Log] Запуск...")
     try:
         url = (f"https://api.open-meteo.com/v1/forecast?latitude={LAT}&longitude={LON}"
                f"&current=temperature_2m,relative_humidity_2m,apparent_temperature,surface_pressure,weather_code,wind_speed_10m,wind_direction_10m,wind_gusts_10m,cloud_cover,uv_index,visibility,dew_point_2m"
-               f"&hourly=temperature_2m,surface_pressure,relative_humidity_2m,precipitation,precipitation_probability,weather_code,soil_temperature_0cm"
+               f"&hourly=temperature_2m,surface_pressure,relative_humidity_2m,wind_speed_10m,wind_gusts_10m,precipitation,precipitation_probability,weather_code,visibility,dew_point_2m,soil_temperature_0cm"
                f"&daily=temperature_2m_max,temperature_2m_min,precipitation_sum,precipitation_probability_max,wind_speed_10m_max,wind_gusts_10m_max,sunrise,sunset&past_days=3&timezone=auto")
-        res = requests.get(url, timeout=15)
-        res.raise_for_status()
-        data = res.json()
-    except Exception as e: log(f"❌ Error: {e}"); sys.exit(1)
+        data = requests.get(url, timeout=15).json()
+        log("📡 [Belgidromet Log] Данные Open-Meteo получены.")
+    except Exception as e: log(f"❌ [Belgidromet Log] Ошибка API: {e}"); sys.exit(1)
 
-    cur, h, d = data['current'], data['hourly'], data['daily']
+    cur, h_data, d_data = data['current'], data['hourly'], data['daily']
     now = datetime.datetime.utcnow() + datetime.timedelta(hours=3)
-    hour, dow = now.hour, now.weekday()
-    idx_now = 72 + hour
+    hour, dow, idx_now = now.hour, now.weekday(), 72 + now.hour
 
     temp = cur['temperature_2m']
-    delta_24 = round(temp - h['temperature_2m'][idx_now - 24], 1)
-    recent_rain = round(sum(h['precipitation'][idx_now - 72 : idx_now]), 1)
-    soil_temp = h['soil_temperature_0cm'][idx_now]
-    press_now = int(cur['surface_pressure'] * 0.750062)
+    press_now_mm = int(cur['surface_pressure'] * 0.750062)
+    soil_temp = h_data['soil_temperature_0cm'][idx_now]
 
-    future_data = []
-    for i in range(1, 4):
-        future_data.append(f"Через {i*24}ч: T={d['temperature_2m_max'][3+i]}C, Осадки={d['precipitation_sum'][3+i]}мм")
+    # Динамика и Осадки (0.01 мм)
+    delta_24 = round(temp - h_data['temperature_2m'][idx_now - 24], 1)
+    recent_rain = round(sum(h_data['precipitation'][idx_now - 24 : idx_now]), 1)
 
     precip_info = "без осадков"
-    for i in range(idx_now, idx_now + 18):
-        v, prob = h['precipitation'][i], h['precipitation_probability'][i]
-        if v > 0.1 or prob > 20:
-            precip_info = f"{get_weather_desc(h['weather_code'][i])} ({prob}%) около {i % 24:02d}:00"
+    for i in range(idx_now, idx_now + 12):
+        v, prob = h_data['precipitation'][i], h_data['precipitation_probability'][i]
+        if v > 0.01 or prob > 5:
+            precip_info = f"{get_weather_desc(h_data['weather_code'][i])} ({prob}%) около {i % 24:02d}:00"
             break
 
-    danger_alerts = []
-    kp_val = 0
+    # Магнитный фон и Воздух
+    kp_now = 0.0
     try:
         kp_res = requests.get("https://services.swpc.noaa.gov/products/noaa-scales.json", timeout=10).json()
-        kp_val = float(kp_res[0]['kp']) if isinstance(kp_res, list) else float(kp_res['0']['mag_eff']['kp'])
-        if kp_val >= 6: danger_alerts.append(f"{'🔴 КРАСНЫЙ' if kp_val >= 8 else '🟠 ОРАНЖЕВЫЙ'} уровень: Магнитная буря (Kp {kp_val})! 🧲")
+        kp_now = float(kp_res['0']['mag_eff']['kp']) if '0' in kp_res else float(kp_res[0]['kp'])
+    except: log("⚠️ [Belgidromet Log] Kp API error.")
+
+    pm25 = 0.0
+    try:
+        aq_res = requests.get(f"https://air-quality-api.open-meteo.com/v1/air-quality?latitude={LAT}&longitude={LON}&current=pm2_5", timeout=10).json()
+        pm25 = aq_res['current']['pm2_5']
     except: pass
 
+    # Предупреждения (Оранж и Красный)
+    danger_alerts = []
     gusts = cur.get('wind_gusts_10m', 0)
-    if gusts >= 54: danger_alerts.append(f"{'🔴 КРАСНЫЙ' if gusts >= 90 else '🟠 ОРАНЖЕВЫЙ'} уровень: Ветер {gusts} км/ч! 🌬️")
-    if temp >= 30 or temp <= -25: danger_alerts.append("🟠 ОРАНЖЕВЫЙ уровень: Опасная температура! 🌡️")
-    if cur['weather_code'] in [66, 67] or (temp < 1 and soil_temp < 0 and sum(h['precipitation'][idx_now-6:idx_now]) > 0):
-        danger_alerts.append("🟠 ОРАНЖЕВЫЙ уровень: Гололедица! ⛸️")
+    if gusts >= 90: danger_alerts.append("🚨 **КРАСНЫЙ УРОВЕНЬ:** Ураган! (90+ км/ч)")
+    elif gusts >= 54: danger_alerts.append("🟠 **ОРАНЖЕВЫЙ УРОВЕНЬ:** Сильный ветер! (54+ км/ч)")
+    if kp_now >= 8: danger_alerts.append(f"🚨 **КРАСНЫЙ УРОВЕНЬ:** Экстремальный шторм! (Kp {kp_now})")
+    elif kp_now >= 6: danger_alerts.append(f"🟠 **ОРАНЖЕВЫЙ УРОВЕНЬ:** Магнитная буря! (Kp {kp_now})")
+    if temp >= 30 or temp <= -25: danger_alerts.append(f"🟠 **ОРАНЖЕВЫЙ УРОВЕНЬ:** Опасная температура! ({temp}°C)")
+    if cur['weather_code'] in [66, 67] or (temp < 1 and soil_temp < 0 and sum(h_data['precipitation'][idx_now-6:idx_now]) > 0):
+        danger_alerts.append("🟠 **ОРАНЖЕВЫЙ УРОВЕНЬ:** Гололедица! ⛸️")
 
-    # --- Промты (БЕЗ ИЗМЕНЕНИЙ) ---
+    # Промты (Упрощенные и понятные)
     ai_text = ""
-    common_context = f"История 72ч: осадков {recent_rain}мм, изм. темп. {delta_24}C. Будущее 72ч: {future_data}. Почва: {soil_temp}C. Давление: {press_now}мм. Магн.фон: {kp_val}Kp. УФ: {cur['uv_index']}."
-
     if 5 <= hour < 14:
         tag, label = "🌅", "#прогнозутро"
-        preamble = ("Ты — ведущий эксперт метеослужбы. Твой анализ базируется на данных и динамике атмосферы.Твоя задача: утвердительно описать синоптический процесс дня и его влияние на погоду и самочувствие.Определи тип воздушной массы,её трансформацию и влияние.Укажи, как сочетание температуры, влажности и давления повлияет на тонус и концентрацию.Оцени состояние подстилающей поверхности (прогрев почвы или выхолаживание).Свяжи тренд давления с облачностью.ПРАВИЛА: Говори уверенно, используй глаголы: «наблюдается», «обусловит», «сформирует», «сохранится»,полностью исключи слова: «вероятно», «возможно», «может быть».Стиль: Сухой, профессиональный, понятный простому человеку.3-4 ёмких предложения.")
+        preamble = "Ты — метеоролог-практик. Твоя задача: просто и четко объяснить погоду на день. Используй конкретику, например: «на нашу территорию сместился циклон/антициклон». Объясни, как это повлияет на людей: будет ли скользко из-за замерзшей земли, будет ли голова тяжелой из-за давления. Говори прямо и уверенно. ПРАВИЛА: Используй глаголы: «наблюдается», «принесет», «сформирует». Запрещено: «вероятно», «возможно», «может быть». 3 предложения."
     elif hour >= 20:
         tag, label = "🌙", "#прогнозвечер"
-        preamble = ("Ты — главный синоптик смены. Подведи итог суточного энергообмена. Твоя задача: на основе радиационного баланса(облачность) и влажности определить характер ночи и утра.Спрогнозируй тип конденсации: при отрицательных температурах — гололедица или иней; при положительных — туман или роса.Оцени, как барический тренд(падение или рост давления) и ночное остывание изменят погоду и скажутся на качестве сна и самочувствии к утра.ПРАВИЛА:Экспертный вердикт понятный простому человеку.3 ёмких предложения.Говори уверенно, используй глаголы: «наблюдается», «обусловит», «сформирует», «сохранится»,полностью исключи слова: «вероятно», «возможно», «может быть».")
+        preamble = "Ты — старший синоптик. Расскажи, чего ждать от ночи и утра. Если влажно и холодно — предупреди про туман или гололед на дорогах. Если давление скачет — предупреди, что сон может быть неспокойным. Обязательно используй формулировки типа «на нашу территорию сместился циклон/антициклон». ПРАВИЛА: Четкий экспертный вердикт без сомнений. Исключи: «может», «скорее всего». 3 предложения."
     else: tag, label, preamble = "🌤️", "#прогноздень", None
 
-    if preamble: ai_text = ask_ai_cascade(f"{common_context} Текущее: {cur}", preamble)
+    if preamble:
+        ai_input = f"History: Delta24h={delta_24}, Precip72h={recent_rain}mm. Current: Temp={temp}, Hum={cur['relative_humidity_2m']}, Press={press_now_mm}, Soil={soil_temp}, UV={cur['uv_index']}, Wind={cur['wind_speed_10m']}, Gusts={gusts}."
+        ai_text = ask_ai_cascade(ai_input, preamble)
 
+    # Сборка сообщения
     warning_block = ("\n" + "\n".join(danger_alerts) + "\n") if danger_alerts else ""
-    ai_section = f"\n📝 **Аналитика:**\n{ai_text}" if ai_text else ""
+    ai_section = f"\n📝 **АНАЛИТИКА:**\n{ai_text}" if ai_text else ""
 
     msg = (f"{tag} {label}\n\n🏙 **Пинск сейчас:**\n"
-           f"🌡 **Температура:** {temp}°C (ощущ. {cur['apparent_temperature']}°C)\n"
-           f"🌧 **Осадки:** {precip_info}\n"
-           f"💨 **Ветер:** {cur['wind_speed_10m']} км/ч (пор. {gusts}) {get_wind_dir(cur['wind_direction_10m'])}\n"
-           f"💧 **Влажность:** {cur['relative_humidity_2m']}% {get_humidity_desc(cur['relative_humidity_2m'], temp)}\n"
-           f"📈 **Давление:** {press_now} мм {get_pressure_desc(press_now)}\n"
-           f"☀️ **УФ-индекс:** {cur['uv_index']} {get_uv_desc(cur['uv_index'])}\n"
-           f"🕒 **День:** {d['sunrise'][3][-5:]} — {d['sunset'][3][-5:]}\n"
+           f"🌡 Температура: {temp}°C (ощущ. {cur['apparent_temperature']}°C)\n"
+           f"☁️ Облачность: {cur['cloud_cover']}% ({get_weather_desc(cur['weather_code'])})\n"
+           f"🌧 Осадки: {precip_info}\n"
+           f"💨 Ветер: {cur['wind_speed_10m']} км/ч (порывы {gusts} км/ч) {get_wind_dir(cur['wind_direction_10m'])} ({get_wind_power(cur['wind_speed_10m'])})\n"
+           f"💧 Влажность: {cur['relative_humidity_2m']}% {get_humidity_desc(cur['relative_humidity_2m'], temp)}\n"
+           f"📈 Давление: {press_now_mm} мм {get_pressure_desc(press_now_mm)}\n"
+           f"🧲 Магнитный фон: {kp_now} Kp {get_kp_desc(kp_now)}\n"
+           f"☀️ УФ-индекс: {cur['uv_index']} {get_uv_desc(cur['uv_index'])}\n"
+           f"✨ Видимость: {get_visibility_desc(cur['visibility'])}\n"
+           f"🕒 Световой день: {d_data['sunrise'][3][-5:]} — {d_data['sunset'][3][-5:]}\n"
+           f"🍃 Воздух: {pm25} PM2.5 {get_aqi_desc(pm25)}\n"
            f"{warning_block}{ai_section}")
 
-    requests.post(f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage", json={"chat_id": CH_ID, "text": msg, "parse_mode": "Markdown"})
+    t_res = requests.post(f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage", json={"chat_id": CH_ID, "text": msg, "parse_mode": "Markdown"})
+    if t_res.status_code == 200: log("✅ [Belgidromet Log] Сводка отправлена.")
 
+    # --- СТРАТЕГИЯ НА 3 ДНЯ (СР и ВС вечер) ---
     if hour >= 20 and dow in [2, 6]:
-        blocks = []
+        log("🗓 [Belgidromet Log] Формирование прогноза на 3 дня...")
+        day_blocks = []
         for i in range(4, 7):
-            dt = (now + datetime.timedelta(days=i-3)).strftime('%a, %d.%m').replace('Mon','Пн').replace('Tue','Вт').replace('Wed','Ср').replace('Thu','Чт').replace('Fri','Пт').replace('Sat','Сб').replace('Sun','Вс')
-            t_max, t_min = d['temperature_2m_max'][i], d['temperature_2m_min'][i]
-            p_sum, p_prob = d['precipitation_sum'][i], d['precipitation_probability_max'][i]
-            w_max, g_max = d['wind_speed_10m_max'][i], d['wind_gusts_10m_max'][i]
+            idx = i * 24
+            d_name = (now + datetime.timedelta(days=i-3)).strftime('%a, %d.%m').replace('Mon','Пн').replace('Tue','Вт').replace('Wed','Ср').replace('Thu','Чт').replace('Fri','Пт').replace('Sat','Сб').replace('Sun','Вс')
+            t_max, t_min = d_data['temperature_2m_max'][i], d_data['temperature_2m_min'][i]
+            p_sum, p_prob = d_data['precipitation_sum'][i], d_data['precipitation_probability_max'][i]
+            press_d = int(h_data['surface_pressure'][idx + 12] * 0.750062)
 
-            p_desc = get_weather_desc(h['weather_code'][i*24 + 12]) if p_sum > 0.1 else "без осадков"
+            p_text = f"{get_weather_desc(h_data['weather_code'][idx + 12])} ({p_prob}%)" if p_sum > 0.01 or p_prob > 10 else "без осадков"
 
-            alert_str = ""
-            if g_max >= 54 or t_max >= 30: alert_str = "\n⚠️ **Уровень:** 🟠 ОРАНЖЕВЫЙ"
-            if g_max >= 90: alert_str = "\n⚠️ **Уровень:** 🔴 КРАСНЫЙ"
+            block = (f"📅 **{d_name}**\n"
+                     f"🌡 Темп: {t_min}..{t_max}°C\n"
+                     f"🌧 Осадки: {p_text}\n"
+                     f"💨 Ветер: {d_data['wind_speed_10m_max'][i]} км/ч {get_wind_dir(h_data['wind_direction_10m'][idx+12])}\n"
+                     f"📈 Давление: {press_d} мм {get_pressure_desc(press_d)}")
+            day_blocks.append(block)
 
-            blocks.append(f"📅 **{dt}**\n🌡 **Темп:** {t_min}..{t_max}°C\n🌧 **Осадки:** {p_desc} ({p_prob}%)\n🌬 **Ветер:** {w_max} км/ч (пор. {g_max}){alert_str}")
+        strat_ai = ask_ai_cascade(f"Future: {day_blocks}", "Ты — метеоролог. Выяви сюжет на 3 дня. Напиши 3 предложения о перемещении циклонов/антициклонов и рисках для здоровья (давление, гололед). Понятно и уверенно.")
 
-        strat_ai_prompt = ("Ты — руководитель аналитического центра метеорологии.Тебе нужно выявить «синоптический сюжет» на следующие 3 дня. Твоя задача: связать накопленные данные прошлого с грядущими изменениями.Объясни причину смены погоды.Оцени риски для инфраструктуры и комфорта людей (гололедные явления, тепловой стресс, порывистый ветер). Спрогнозируй нагрузку на сосуды при скачках давления или температурах. Оцени риск гипоксии.Если в данных есть Оранжевый или Красный уровень — добавь в аналитику с объяснения причины его возникновения.ПРАВИЛА: пиши как для серьезного СМИ: профессионально, доступно, без «воды».Исключи слова-паразиты и неопределенность.Стиль:Глубокая аналитика,но понятная обычному человеку. 3-4 ёмких предложения.Говори уверенно, используй глаголы: «наблюдается», «обусловит», «сформирует», «сохранится»,полностью исключи слова: «вероятно», «возможно», «может быть».")
-        strat_ai_text = ask_ai_cascade(f"History: {recent_rain}mm. FutureData: {blocks}", strat_ai_prompt)
-
-        strat_msg = "🗓 #прогноз3дня\n🔭 **3 дня**\n\n" + "\n\n".join(blocks) + (f"\n\n🏛 **Аналитика:**\n{strat_ai_text}" if strat_ai_text else "")
-        requests.post(f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage", json={"chat_id": CH_ID, "text": strat_msg, "parse_mode": "Markdown"})
+        final_strat = "🗓 #прогноз3дня\n🔭 **АНАЛИЗ НА 3 ДНЯ**\n\n" + "\n\n".join(day_blocks) + f"\n\n🏛 **СТРАТЕГИЯ:**\n{strat_ai}"
+        requests.post(f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage", json={"chat_id": CH_ID, "text": final_strat, "parse_mode": "Markdown"})
+        log("✅ [Belgidromet Log] Стратегия отправлена.")
 
 if __name__ == "__main__":
     main()
