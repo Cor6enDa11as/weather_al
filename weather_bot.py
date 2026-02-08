@@ -70,26 +70,44 @@ def get_visibility_desc(v_m):
     if v_km < 4: return f"{v_km} км (дымка 🌫)"
     return f"{v_km} км (чисто ✨)"
 
-# --- Каскад ИИ агентов ---
+# --- Каскад ИИ с Gemini на первом месте и подробными логами ---
 def ask_ai_cascade(prompt_msg, system_preamble):
-    log("📝 [Belgidromet Log] Анализ каскада ИИ...")
+    log(f"🧠 [AI LOG] Формирование запроса. Данные: {prompt_msg[:100]}...")
+
+    # 1. ПЕРВОЕ МЕСТО: Gemini
+    if GEMINI_KEY:
+        try:
+            log("🤖 [AI LOG] Попытка №1: Gemini 3 Flash (Основной)...")
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_KEY}"
+            payload = {"contents": [{"parts": [{"text": f"{system_preamble}\n\nДанные: {prompt_msg}"}]}]}
+            res = requests.post(url, json=payload, timeout=60)
+
+            if res.status_code == 200:
+                log("✅ [AI LOG] Gemini ответил успешно.")
+                data = res.json()
+                return data['candidates'][0]['content']['parts'][0]['text'].strip()
+            else:
+                log(f"⚠️ [AI LOG] Gemini отклонил запрос (Код: {res.status_code}). Текст: {res.text[:100]}")
+        except Exception as e:
+            log(f"❌ [AI LOG] Критическая ошибка Gemini: {e}")
+
+    # 2. ВТОРОЕ МЕСТО: Cohere (Запасной)
     if COHERE_KEY:
         try:
-            log("🤖 [Belgidromet Log] Агент: Cohere...")
+            log("🤖 [AI LOG] Попытка №2: Cohere (Запасной)...")
             res = requests.post("https://api.cohere.ai/v1/chat",
                                 headers={"Authorization": f"Bearer {COHERE_KEY}"},
                                 json={"message": prompt_msg, "model": "command-r-plus-08-2024", "preamble": system_preamble},
-                                timeout=60).json()
-            if 'text' in res: return res['text'].strip()
-        except Exception as e: log(f"⚠️ [Belgidromet Log] Cohere error: {e}")
-    if GEMINI_KEY:
-        try:
-            log("🤖 [Belgidromet Log] Агент: Gemini 3 Flash...")
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash:generateContent?key={GEMINI_KEY}"
-            payload = {"contents": [{"parts": [{"text": f"{system_preamble}\n\nДанные: {prompt_msg}"}]}]}
-            res = requests.post(url, json=payload, timeout=90).json()
-            if 'candidates' in res: return res['candidates'][0]['content']['parts'][0]['text'].strip()
-        except Exception as e: log(f"⚠️ [Belgidromet Log] Gemini error: {e}")
+                                timeout=40)
+            if res.status_code == 200:
+                log("✅ [AI LOG] Cohere выручил (ответ получен).")
+                return res.json().get('text', '').strip()
+            else:
+                log(f"⚠️ [AI LOG] Cohere тоже не ответил (Код: {res.status_code})")
+        except Exception as e:
+            log(f"❌ [AI LOG] Ошибка Cohere: {e}")
+
+    log("🚫 [AI LOG] Ни один ИИ-агент не смог обработать запрос.")
     return "Аналитика сейчас недоступна."
 
 def main():
@@ -151,7 +169,7 @@ def main():
     if 5 <= hour < 14:
         tag, label = "🌅", "#прогнозутро"
         preamble = "Ты — метеоролог-практик. Твоя задача: просто и четко объяснить погоду на день. Используй конкретику, например: «на нашу территорию сместился циклон/антициклон». Объясни, как это повлияет на людей: будет ли скользко из-за замерзшей земли, будет ли голова тяжелой из-за давления. Говори прямо и уверенно. ПРАВИЛА: Используй глаголы: «наблюдается», «принесет», «сформирует». Запрещено: «вероятно», «возможно», «может быть». 3 предложения."
-    elif hour >= 20:
+    elif hour >= 20 or hour < 5:
         tag, label = "🌙", "#прогнозвечер"
         preamble = "Ты — старший синоптик. Расскажи, чего ждать от ночи и утра. Если влажно и холодно — предупреди про туман или гололед на дорогах. Если давление скачет — предупреди, что сон может быть неспокойным. Обязательно используй формулировки типа «на нашу территорию сместился циклон/антициклон». ПРАВИЛА: Четкий экспертный вердикт без сомнений. Исключи: «может», «скорее всего». 3 предложения."
     else: tag, label, preamble = "🌤️", "#прогноздень", None
