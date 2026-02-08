@@ -87,7 +87,9 @@ def main():
 
     cur, h, d = data['current'], data['hourly'], data['daily']
     now = datetime.datetime.utcnow() + datetime.timedelta(hours=3)
-    hour, dow, idx_now = now.hour, now.weekday(), 72 + hour
+    hour = now.hour
+    dow = now.weekday()
+    idx_now = 72 + hour
 
     temp = cur['temperature_2m']
     delta_24 = round(temp - h['temperature_2m'][idx_now - 24], 1)
