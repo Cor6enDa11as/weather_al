@@ -163,7 +163,7 @@ def main():
            f"☀️ **УФ-индекс:**\n{cur['uv_index']}\n\n"
            f"🕒 **День:**\n{d['sunrise'][3][-5:]} — {d['sunset'][3][-5:]}\n"
            f"{warning_block}"
-           f"{f'\n📝 **СИНОПТИК:**\n{ai_text}' if ai_text else ''}")
+           f"{'\n📝 **Аналитика:**\n'+{ai_text} if ai_text else ''}")
 
     requests.post(f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage", json={"chat_id": CH_ID, "text": msg, "parse_mode": "Markdown"})
 
@@ -184,7 +184,7 @@ def main():
 
         strat_ai_text = ask_ai_cascade(f"History: {recent_rain}mm. FutureData: {blocks}", strat_ai_prompt)
 
-        strat_msg = "🗓 #стратегия\n🔭 **СТРАТЕГИЯ НА 3 ДНЯ**\n\n" + "\n---\n\n".join(blocks)
+        strat_msg = "🗓 #прогноз3дня\n🔭 **3 дня**\n\n" + "\n---\n\n".join(blocks)
         strat_msg += f"\n\n🏛 **АНАЛИТИКА:**\n{strat_ai_text}"
         requests.post(f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage", json={"chat_id": CH_ID, "text": strat_msg, "parse_mode": "Markdown"})
         log("✅ Стратегия отправлена.")
