@@ -78,9 +78,9 @@ def ask_ai_cascade(prompt_msg, system_preamble):
     if GEMINI_KEY:
         try:
             log("🤖 [AI LOG] Попытка №1: Gemini 3 Flash (Основной)...")
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash:generateContent?key={GEMINI_KEY}"
+            url = f"https://generativelanguage.googleapis.com/v1/models/gemini-3-flash:generateContent?key={GEMINI_KEY}"
             payload = {"contents": [{"parts": [{"text": f"{system_preamble}\n\nДанные: {prompt_msg}"}]}]}
-            res = requests.post(url, json=payload, timeout=60)
+            res = requests.post(url, json=payload, timeout=90)
 
             if res.status_code == 200:
                 log("✅ [AI LOG] Gemini ответил успешно.")
@@ -98,7 +98,7 @@ def ask_ai_cascade(prompt_msg, system_preamble):
             res = requests.post("https://api.cohere.ai/v1/chat",
                                 headers={"Authorization": f"Bearer {COHERE_KEY}"},
                                 json={"message": prompt_msg, "model": "command-r-plus-08-2024", "preamble": system_preamble},
-                                timeout=40)
+                                timeout=60)
             if res.status_code == 200:
                 log("✅ [AI LOG] Cohere выручил (ответ получен).")
                 return res.json().get('text', '').strip()
