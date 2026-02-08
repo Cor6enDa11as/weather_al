@@ -78,7 +78,7 @@ def ask_ai_cascade(prompt_msg, system_preamble):
     if GEMINI_KEY:
         try:
             log("🤖 [AI LOG] Попытка №1: Gemini 3 Flash (Основной)...")
-            url = f"https://generativelanguage.googleapis.com/v1/models/gemini-3-flash-preview:generateContent?key={GEMINI_KEY}"
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key={GEMINI_KEY}"
             payload = {"contents": [{"parts": [{"text": f"{system_preamble}\n\nДанные: {prompt_msg}"}]}]}
             res = requests.post(url, json=payload, timeout=90)
 
