@@ -19,7 +19,6 @@ def get_wind_dir(deg):
     return dirs[int((deg + 22.5) % 360 / 45)]
 
 def get_wind_power(speed, gusts):
-    # Умная чувствительность: если порывы значительно выше среднего
     diff = gusts - speed
     base = ""
     if speed < 5: base = "штиль 💨"
@@ -27,7 +26,6 @@ def get_wind_power(speed, gusts):
     elif speed < 29: base = "умеренный 🌬️"
     elif speed < 50: base = "сильный 🌪️"
     else: base = "ОЧЕНЬ СИЛЬНЫЙ ⚠️"
-
     if diff > 15: return f"{base} (рваный характер ⚠️)"
     return base
 
@@ -79,11 +77,11 @@ def get_visibility_desc(v_m):
 
 # --- Каскад ИИ ---
 def ask_ai_cascade(prompt_msg, system_preamble):
-    log(f"🧠 [AI LOG] Анализ векторов Gemini 3 Flash...")
+    log(f"🧠 [AI LOG] Анализ векторов Gemini 3 Flash (144ч окно)...")
     if GEMINI_KEY:
         try:
             url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key={GEMINI_KEY}"
-            payload = {"contents": [{"parts": [{"text": f"{system_preamble}\n\nВЕКТОРНЫЕ ДАННЫЕ:\n{prompt_msg}"}]}]}
+            payload = {"contents": [{"parts": [{"text": f"{system_preamble}\n\nДАННЫЕ (Past 72h + Future 72h):\n{prompt_msg}"}]}]}
             res = requests.post(url, json=payload, timeout=90)
             if res.status_code == 200:
                 return res.json()['candidates'][0]['content']['parts'][0]['text'].strip()
@@ -100,7 +98,7 @@ def ask_ai_cascade(prompt_msg, system_preamble):
     return "Аналитика сейчас недоступна."
 
 def main():
-    log("🚀 [Belgidromet Log] Сбор данных (72ч архив + прогноз)...")
+    log("🚀 [Belgidromet Log] Сбор данных (Архив + Прогноз)...")
     try:
         url = (f"https://api.open-meteo.com/v1/forecast?latitude={LAT}&longitude={LON}"
                f"&current=temperature_2m,relative_humidity_2m,apparent_temperature,surface_pressure,weather_code,wind_speed_10m,wind_direction_10m,wind_gusts_10m,cloud_cover,uv_index,visibility,dew_point_2m"
@@ -113,26 +111,30 @@ def main():
     now = datetime.datetime.utcnow() + datetime.timedelta(hours=3)
     hour, dow, idx_now = now.hour, now.weekday(), 72 + now.hour
 
-    # --- Подготовка Векторов (72ч под капотом) ---
-    p_now = cur['surface_pressure']
-    p_72h = h_data['surface_pressure'][idx_now - 72]
-    p_trend = "Rapidly Falling" if p_now - p_72h < -10 else "Rising" if p_now - p_72h > 10 else "Stable"
+    # --- Подготовка расширенных данных для ИИ (144ч окно) ---
+    past_72h = {
+        "t_delta": round(cur['temperature_2m'] - h_data['temperature_2m'][idx_now - 72], 1),
+        "p_delta": round(cur['surface_pressure'] - h_data['surface_pressure'][idx_now - 72], 1),
+        "h_delta": round(cur['relative_humidity_2m'] - h_data['relative_humidity_2m'][idx_now - 72], 1),
+        "precip_sum": round(sum(h_data['precipitation'][idx_now-72:idx_now]), 1)
+    }
 
-    t_delta_72 = round(cur['temperature_2m'] - h_data['temperature_2m'][idx_now - 72], 1)
-    hum_trend = "Increasing Moisture" if cur['relative_humidity_2m'] - h_data['relative_humidity_2m'][idx_now - 72] > 20 else "Stable"
+    future_72h_summary = []
+    for d in range(3):
+        s_idx = idx_now + (d * 24)
+        e_idx = s_idx + 24
+        future_72h_summary.append({
+            "day": (now + datetime.timedelta(days=d)).strftime('%d.%m'),
+            "t_range": f"{min(h_data['temperature_2m'][s_idx:e_idx])}..{max(h_data['temperature_2m'][s_idx:e_idx])}°C",
+            "max_precip_prob": f"{max(h_data['precipitation_probability'][s_idx:e_idx])}%"
+        })
 
-    precip_72h = sum(h_data['precipitation'][idx_now-72:idx_now])
-    soil_status = "Oversaturated" if precip_72h > 15 else "Dry"
-
-    dew_spread = abs(cur['temperature_2m'] - cur['dew_point_2m'])
-    fog_risk = "High Fog/Ice Risk" if dew_spread < 2 else "Low Risk"
-
-    # Магнитный фон (G-Scale NOAA)
+    # Магнитный фон
     g_now = 0
     try:
         g_res = requests.get("https://services.swpc.noaa.gov/products/noaa-scales.json", timeout=10).json()
         g_now = int(g_res['0']['G']['Scale'])
-    except: log("⚠️ [Belgidromet Log] G-Scale API error.")
+    except: pass
 
     # Воздух
     pm25 = 0.0
@@ -141,45 +143,48 @@ def main():
         pm25 = aq_res['current']['pm2_5']
     except: pass
 
-    # --- Сборка уровней опасности ---
+    # Предупреждения
     danger_alerts = []
     gusts = cur.get('wind_gusts_10m', 0)
     if gusts >= 90: danger_alerts.append("🚨 **КРАСНЫЙ УРОВЕНЬ:** Ураган! (90+ км/ч)")
     elif gusts >= 54: danger_alerts.append("🟠 **ОРАНЖЕВЫЙ УРОВЕНЬ:** Сильный ветер! (54+ км/ч)")
-
     if g_now >= 3: danger_alerts.append(f"🚨 **КРАСНЫЙ УРОВЕНЬ:** Сильный шторм! (Scale G{g_now})")
     elif g_now >= 2: danger_alerts.append(f"🟠 **ОРАНЖЕВЫЙ УРОВЕНЬ:** Умеренная буря! (Scale G{g_now})")
-
     if cur['temperature_2m'] >= 30 or cur['temperature_2m'] <= -25: danger_alerts.append("🟠 **ОРАНЖЕВЫЙ УРОВЕНЬ:** Опасная температура!")
     if cur['weather_code'] in [66, 67] or (cur['temperature_2m'] < 1 and h_data['soil_temperature_0cm'][idx_now] < 0 and sum(h_data['precipitation'][idx_now-6:idx_now]) > 0):
         danger_alerts.append("🟠 **ОРАНЖЕВЫЙ УРОВЕНЬ:** Гололедица! ⛸️")
 
-    # --- Универсальные Промты ---
-    ai_text = ""
-    common_rules = "Запрещено: «вероятно», «возможно», «может быть». Используй термины циклон/антициклон. Адаптируй советы под сезон. Максимум 3 предложения."
+    # --- Логика осадков ---
+    precip_info = "без осадков"
+    for i in range(idx_now, idx_now + 12):
+        t_h = h_data['temperature_2m'][i]
+        prob = h_data['precipitation_probability'][i]
+        if h_data['precipitation'][i] > 0.01 or prob > 5:
+            if t_h <= -1: p_type = "снег ❄️"
+            elif -1 < t_h < 2: p_type = "мокрый снег 🌨"
+            else: p_type = "дождь 🌧"
+            precip_info = f"{p_type} ({prob}%) около {i % 24:02d}:00"
+            break
 
+    # Промты
+    ai_text = ""
+    common_rules = "Запрещено: «вероятно», «возможно», «может быть».3-4 предложения без цифр."
     if 5 <= hour < 14:
         tag, label = "🌅", "#прогнозутро"
-        preamble = f"Ты — метеоролог-профи. Дай четкий план на день. {common_rules}"
+        preamble = f"Ты — метеоролог-профи.Проанализируй массив данных и на их основе расскажи каким будет сегодняшний день. {common_rules}"
     elif hour >= 20 or hour < 5:
         tag, label = "🌙", "#прогнозвечер"
-        preamble = f"Ты — ночной синоптик. Оцени сон и утро (G-Scale, туман, гололед). {common_rules}"
+        preamble = f"Ты — метеоролог-профи.Проанализируй массив данных и на их основе расскажи чего ждать ночью и ранним утром {common_rules}"
     else: tag, label, preamble = "🌤️", "#прогноздень", None
 
     if preamble:
-        vectors = f"P_Trend_72h: {p_trend}, T_Delta_72h: {t_delta_72}, Soil: {soil_status}, Hum_Trend: {hum_trend}, Fog_Risk: {fog_risk}, G_Scale: {g_now}, AQI: {pm25}."
-        ai_text = ask_ai_cascade(vectors, preamble)
-
-    # Осадки (ближайшие 12ч)
-    precip_info = "без осадков"
-    for i in range(idx_now, idx_now + 12):
-        if h_data['precipitation'][i] > 0.01 or h_data['precipitation_probability'][i] > 5:
-            precip_info = f"{get_weather_desc(h_data['weather_code'][i])} около {i % 24:02d}:00"
-            break
+        ai_payload = f"PAST_72H: {past_72h} | FUTURE_72H: {future_72h_summary} | CUR: T={cur['temperature_2m']}, Soil={h_data['soil_temperature_0cm'][idx_now]}, G={g_now}"
+        ai_text = ask_ai_cascade(ai_payload, preamble)
 
     # Сборка сообщения
     press_mm = int(cur['surface_pressure'] * 0.750062)
     warning_block = ("\n" + "\n".join(danger_alerts) + "\n") if danger_alerts else ""
+    ai_section = f"\n📝 **Аналитика:**\n{ai_text}" if ai_text else ""
 
     msg = (f"{tag} {label}\n\n🏙 **Пинск сейчас:**\n"
            f"🌡 Температура: {cur['temperature_2m']}°C (ощущ. {cur['apparent_temperature']}°C)\n"
@@ -193,11 +198,11 @@ def main():
            f"✨ Видимость: {get_visibility_desc(cur['visibility'])}\n"
            f"🕒 Световой день: {d_data['sunrise'][3][-5:]} — {d_data['sunset'][3][-5:]}\n"
            f"🍃 Воздух: {pm25} PM2.5 {get_aqi_desc(pm25)}\n"
-           f"{warning_block}\n📝 **Аналитика:**\n{ai_text}")
+           f"{warning_block}{ai_section}")
 
     requests.post(f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage", json={"chat_id": CH_ID, "text": msg, "parse_mode": "Markdown"})
 
-    # --- СТРАТЕГИЯ НА 3 ДНЯ (СР и ВС) ---
+    # Стратегия на 3 дня
     if hour >= 20 and dow in [2, 6]:
         day_blocks = []
         for i in range(4, 7):
@@ -206,10 +211,7 @@ def main():
             block = (f"📅 **{d_name}**\n🌡 {d_data['temperature_2m_min'][i]}..{d_data['temperature_2m_max'][i]}°C\n"
                      f"🌧 {get_weather_desc(h_data['weather_code'][idx+12])}\n💨 Порывы: {d_data['wind_gusts_10m_max'][i]} км/ч")
             day_blocks.append(block)
-
-        strat_preamble = f"Ты — главный климатолог. Выяви сюжет на 3 дня на основе векторов последних 72 часов. {common_rules}"
-        strat_ai = ask_ai_cascade(f"Future: {day_blocks}, History_Vect: {p_trend}, {t_delta_72}", strat_preamble)
-
+        strat_ai = ask_ai_cascade(f"Future: {day_blocks}, History_Vect: {past_72h}", f"Ты — климатолог.Проанализируй массив данных и на их основе выяви сюжет на ближайшие 3 дня. {common_rules}")
         final_strat = "🗓 #прогноз3дня\n🔭 **АНАЛИЗ НА 3 ДНЯ**\n\n" + "\n\n".join(day_blocks) + f"\n\n🏛 **СТРАТЕГИЯ:**\n{strat_ai}"
         requests.post(f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage", json={"chat_id": CH_ID, "text": final_strat, "parse_mode": "Markdown"})
 
