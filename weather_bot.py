@@ -111,7 +111,6 @@ def main():
     now = datetime.datetime.utcnow() + datetime.timedelta(hours=3)
     hour, dow, idx_now = now.hour, now.weekday(), 72 + now.hour
 
-    # --- Подготовка расширенных данных для ИИ (144ч окно) ---
     past_72h = {
         "t_delta": round(cur['temperature_2m'] - h_data['temperature_2m'][idx_now - 72], 1),
         "p_delta": round(cur['surface_pressure'] - h_data['surface_pressure'][idx_now - 72], 1),
@@ -129,21 +128,18 @@ def main():
             "max_precip_prob": f"{max(h_data['precipitation_probability'][s_idx:e_idx])}%"
         })
 
-    # Магнитный фон
     g_now = 0
     try:
         g_res = requests.get("https://services.swpc.noaa.gov/products/noaa-scales.json", timeout=10).json()
         g_now = int(g_res['0']['G']['Scale'])
     except: pass
 
-    # Воздух
     pm25 = 0.0
     try:
         aq_res = requests.get(f"https://air-quality-api.open-meteo.com/v1/air-quality?latitude={LAT}&longitude={LON}&current=pm2_5", timeout=10).json()
         pm25 = aq_res['current']['pm2_5']
     except: pass
 
-    # Предупреждения
     danger_alerts = []
     gusts = cur.get('wind_gusts_10m', 0)
     if gusts >= 90: danger_alerts.append("🚨 **КРАСНЫЙ УРОВЕНЬ:** Ураган! (90+ км/ч)")
@@ -154,7 +150,6 @@ def main():
     if cur['weather_code'] in [66, 67] or (cur['temperature_2m'] < 1 and h_data['soil_temperature_0cm'][idx_now] < 0 and sum(h_data['precipitation'][idx_now-6:idx_now]) > 0):
         danger_alerts.append("🟠 **ОРАНЖЕВЫЙ УРОВЕНЬ:** Гололедица! ⛸️")
 
-    # --- Логика осадков ---
     precip_info = "без осадков"
     for i in range(idx_now, idx_now + 12):
         t_h = h_data['temperature_2m'][i]
@@ -166,22 +161,20 @@ def main():
             precip_info = f"{p_type} ({prob}%) около {i % 24:02d}:00"
             break
 
-    # Промты
     ai_text = ""
     common_rules = "Запрещено: «вероятно», «возможно», «может быть».3-4 предложения без цифр."
     if 5 <= hour < 14:
         tag, label = "🌅", "#прогнозутро"
-        preamble = f"Ты — метеоролог-профи.Проанализируй массив данных и на их основе расскажи каким будет сегодняшний день. {common_rules}"
+        preamble = f"Ты — метеоролог-профи на телевидении.Проанализируй массив данных и на их основе расскажи своим телезрителям какая сегодня будет погода и почему. {common_rules}"
     elif hour >= 20 or hour < 5:
         tag, label = "🌙", "#прогнозвечер"
-        preamble = f"Ты — метеоролог-профи.Проанализируй массив данных и на их основе расскажи чего ждать ночью и ранним утром {common_rules}"
+        preamble = f"Ты — метеоролог-профи на телевидении.Проанализируй массив данных и на их основе расскажи телезрителям какая погода будет ночью и ранним утром и почему {common_rules}"
     else: tag, label, preamble = "🌤️", "#прогноздень", None
 
     if preamble:
         ai_payload = f"PAST_72H: {past_72h} | FUTURE_72H: {future_72h_summary} | CUR: T={cur['temperature_2m']}, Soil={h_data['soil_temperature_0cm'][idx_now]}, G={g_now}"
         ai_text = ask_ai_cascade(ai_payload, preamble)
 
-    # Сборка сообщения
     press_mm = int(cur['surface_pressure'] * 0.750062)
     warning_block = ("\n" + "\n".join(danger_alerts) + "\n") if danger_alerts else ""
     ai_section = f"\n📝 **Аналитика:**\n{ai_text}" if ai_text else ""
@@ -202,17 +195,30 @@ def main():
 
     requests.post(f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage", json={"chat_id": CH_ID, "text": msg, "parse_mode": "Markdown"})
 
-    # Стратегия на 3 дня
+    # --- СТРАТЕГИЯ НА 3 ДНЯ (СР и ВС) ---
     if hour >= 20 and dow in [2, 6]:
         day_blocks = []
         for i in range(4, 7):
             idx = i * 24
+            mid = idx + 12 # Данные на полдень
             d_name = (now + datetime.timedelta(days=i-3)).strftime('%a, %d.%m').replace('Mon','Пн').replace('Tue','Вт').replace('Wed','Ср').replace('Thu','Чт').replace('Fri','Пт').replace('Sat','Сб').replace('Sun','Вс')
-            block = (f"📅 **{d_name}**\n🌡 {d_data['temperature_2m_min'][i]}..{d_data['temperature_2m_max'][i]}°C\n"
-                     f"🌧 {get_weather_desc(h_data['weather_code'][idx+12])}\n💨 Порывы: {d_data['wind_gusts_10m_max'][i]} км/ч")
+
+            p_day = f"{get_weather_desc(h_data['weather_code'][mid])} ({d_data['precipitation_probability_max'][i]}%)"
+            p_mm_day = int(h_data['surface_pressure'][mid] * 0.750062)
+
+            block = (f"📅 **{d_name}**\n"
+                     f"🌡 Температура: {d_data['temperature_2m_min'][i]}..{d_data['temperature_2m_max'][i]}°C\n"
+                     f"☁️ Облачность: {h_data['cloud_cover'][mid]}% ({get_weather_desc(h_data['weather_code'][mid])})\n"
+                     f"🌧 Осадки: {p_day}\n"
+                     f"💨 Ветер: {d_data['wind_speed_10m_max'][i]} км/ч (порывы {d_data['wind_gusts_10m_max'][i]} км/ч) {get_wind_dir(h_data['wind_direction_10m'][mid])}\n"
+                     f"💧 Влажность: {h_data['relative_humidity_2m'][mid]}% {get_humidity_desc(h_data['relative_humidity_2m'][mid], 15)}\n"
+                     f"📈 Давление: {p_mm_day} мм {get_pressure_desc(p_mm_day)}\n"
+                     f"✨ Видимость: {get_visibility_desc(h_data['visibility'][mid])}\n"
+                     f"🕒 Световой день: {d_data['sunrise'][i][-5:]} — {d_data['sunset'][i][-5:]}")
             day_blocks.append(block)
-        strat_ai = ask_ai_cascade(f"Future: {day_blocks}, History_Vect: {past_72h}", f"Ты — климатолог.Проанализируй массив данных и на их основе выяви сюжет на ближайшие 3 дня. {common_rules}")
-        final_strat = "🗓 #прогноз3дня\n🔭 **АНАЛИЗ НА 3 ДНЯ**\n\n" + "\n\n".join(day_blocks) + f"\n\n🏛 **СТРАТЕГИЯ:**\n{strat_ai}"
+
+        strat_ai = ask_ai_cascade(f"Future: {day_blocks}, History_Vect: {past_72h}", f"Ты —  метеоролог-профи на телевидении.Проанализируй массив данных и на их основе расскажи телезрителям какая погода их ждёт ближайшие 3 дня и почему. {common_rules}")
+        final_strat = "🗓 #прогноз3дня\n🔭 **Прогноз на 3 дня**\n\n" + "\n\n".join(day_blocks) + f"\n\n🏛 **Аналитика:**\n{strat_ai}"
         requests.post(f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage", json={"chat_id": CH_ID, "text": final_strat, "parse_mode": "Markdown"})
 
 if __name__ == "__main__":
