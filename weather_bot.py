@@ -121,7 +121,7 @@ def get_visibility_desc(v_m):
     if v_km < 4: return f"{v_km} км (дымка 🌫)"
     return f"{v_km} км (чисто ✨)"
 
-# --- ИСПРАВЛЕННЫЙ КАСКАД ИИ ---
+# --- Каскад ИИ (Исправлено: Краткие логи без текста ответа, остановка при успехе) ---
 def ask_ai_cascade(prompt_msg, system_preamble):
     models = [
         ("Gemini", "gemini"),
@@ -129,35 +129,63 @@ def ask_ai_cascade(prompt_msg, system_preamble):
         ("Mistral", "mistral"),
         ("Groq", "groq")
     ]
+
     for name, m_type in models:
         key = globals().get(f"{name.upper()}_KEY")
         if not key: continue
+
         try:
-            log(f"🧠 [AI] Запрос: {name}")
+            log(f"🧠 [AI] Запрос: {name}...")
+
             if m_type == "gemini":
                 url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={key}"
                 payload = {"contents": [{"parts": [{"text": f"{system_preamble}\n\nДАННЫЕ:\n{prompt_msg}"}]}]}
                 res = requests.post(url, json=payload, timeout=40)
-                if res.status_code == 200: return res.json()['candidates'][0]['content']['parts'][0]['text'].strip()
+                if res.status_code == 200:
+                    data = res.json()
+                    if 'candidates' in data and data['candidates']:
+                        log(f"✅ [AI] {name}: OK")
+                        return data['candidates'][0]['content']['parts'][0]['text'].strip()
+                log(f"❌ [AI] {name} Error: {res.status_code}")
+
             elif m_type == "cohere":
-                res = requests.post("https://api.cohere.ai/v1/chat", headers={"Authorization": f"Bearer {key}"},
-                                    json={"message": prompt_msg, "model": "command-r-plus-08-2024", "preamble": system_preamble}, timeout=40)
-                if res.status_code == 200: return res.json().get('text', '').strip()
+                res = requests.post("https://api.cohere.ai/v1/chat",
+                                    headers={"Authorization": f"Bearer {key}"},
+                                    json={"message": prompt_msg, "model": "command-r-plus-08-2024", "preamble": system_preamble},
+                                    timeout=40)
+                if res.status_code == 200:
+                    log(f"✅ [AI] {name}: OK")
+                    return res.json().get('text', '').strip()
+                log(f"❌ [AI] {name} Error: {res.status_code}")
+
             elif m_type == "mistral":
-                res = requests.post("https://api.mistral.ai/v1/chat/completions", headers={"Authorization": f"Bearer {key}"},
-                                    json={"model": "mistral-large-latest", "messages": [{"role": "system", "content": system_preamble}, {"role": "user", "content": prompt_msg}]}, timeout=30)
-                if res.status_code == 200: return res.json()['choices'][0]['message']['content'].strip()
+                res = requests.post("https://api.mistral.ai/v1/chat/completions",
+                                    headers={"Authorization": f"Bearer {key}"},
+                                    json={"model": "mistral-large-latest", "messages": [{"role": "system", "content": system_preamble}, {"role": "user", "content": prompt_msg}]},
+                                    timeout=30)
+                if res.status_code == 200:
+                    log(f"✅ [AI] {name}: OK")
+                    return res.json()['choices'][0]['message']['content'].strip()
+                log(f"❌ [AI] {name} Error: {res.status_code}")
+
             elif m_type == "groq":
-                res = requests.post("https://api.groq.com/openai/v1/chat/completions", headers={"Authorization": f"Bearer {key}"},
-                                    json={"model": "llama-3.3-70b-versatile", "messages": [{"role": "system", "content": system_preamble}, {"role": "user", "content": prompt_msg}]}, timeout=30)
-                if res.status_code == 200: return res.json()['choices'][0]['message']['content'].strip()
+                res = requests.post("https://api.groq.com/openai/v1/chat/completions",
+                                    headers={"Authorization": f"Bearer {key}"},
+                                    json={"model": "llama-3.3-70b-versatile", "messages": [{"role": "system", "content": system_preamble}, {"role": "user", "content": prompt_msg}]},
+                                    timeout=30)
+                if res.status_code == 200:
+                    log(f"✅ [AI] {name}: OK")
+                    return res.json()['choices'][0]['message']['content'].strip()
+                log(f"❌ [AI] {name} Error: {res.status_code}")
+
         except Exception as e:
-            log(f"⚠️ [AI] {name} fail: {str(e)[:40]}")
+            log(f"⚠️ [AI] {name} Exception: {str(e)[:40]}")
             continue
+
     return "Аналитика сейчас недоступна."
 
 def main():
-    log("🚀 [Belgidromet Log] Сбор данных...")
+    log("🚀 Сбор данных...")
     try:
         url = (f"https://api.open-meteo.com/v1/forecast?latitude={LAT}&longitude={LON}"
                f"&current=temperature_2m,relative_humidity_2m,apparent_temperature,surface_pressure,weather_code,wind_speed_10m,wind_direction_10m,wind_gusts_10m,cloud_cover,uv_index,visibility,dew_point_2m"
