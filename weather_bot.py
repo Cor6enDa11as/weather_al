@@ -102,7 +102,7 @@ def main():
     try:
         url = (f"https://api.open-meteo.com/v1/forecast?latitude={LAT}&longitude={LON}"
                f"&current=temperature_2m,relative_humidity_2m,apparent_temperature,surface_pressure,weather_code,wind_speed_10m,wind_direction_10m,wind_gusts_10m,cloud_cover,uv_index,visibility,dew_point_2m"
-               f"&hourly=temperature_2m,surface_pressure,relative_humidity_2m,wind_speed_10m,wind_gusts_10m,precipitation,precipitation_probability,weather_code,visibility,dew_point_2m,soil_temperature_0cm,cloud_cover"
+               f"&hourly=temperature_2m,surface_pressure,relative_humidity_2m,wind_speed_10m,wind_direction_10m,wind_gusts_10m,precipitation,precipitation_probability,weather_code,visibility,dew_point_2m,soil_temperature_0cm,cloud_cover"
                f"&daily=temperature_2m_max,temperature_2m_min,precipitation_sum,precipitation_probability_max,wind_speed_10m_max,wind_gusts_10m_max,sunrise,sunset&past_days=3&timezone=auto")
         data = requests.get(url, timeout=15).json()
     except Exception as e: log(f"❌ API Error: {e}"); sys.exit(1)
@@ -162,7 +162,7 @@ def main():
             break
 
     ai_text = ""
-    common_rules = "Запрещено: «вероятно», «возможно», «может быть».3-4 предложения без цифр."
+    common_rules = "Запрещено: «вероятно», «возможно», «может быть»,приветствие.3-4 предложения без цифр."
     if 5 <= hour < 14:
         tag, label = "🌅", "#прогнозутро"
         preamble = f"Ты — метеоролог-профи на телевидении.Проанализируй массив данных и на их основе расскажи своим телезрителям какая сегодня будет погода и почему. {common_rules}"
@@ -181,6 +181,7 @@ def main():
 
     msg = (f"{tag} {label}\n\n🏙 **Пинск сейчас:**\n"
            f"🌡 Температура: {cur['temperature_2m']}°C (ощущ. {cur['apparent_temperature']}°C)\n"
+           f"📊 Экстремумы: {d_data['temperature_2m_min'][3]}..{d_data['temperature_2m_max'][3]}°C\n"
            f"☁️ Облачность: {cur['cloud_cover']}% ({get_weather_desc(cur['weather_code'])})\n"
            f"🌧 Осадки: {precip_info}\n"
            f"💨 Ветер: {cur['wind_speed_10m']} км/ч (порывы {gusts} км/ч) {get_wind_dir(cur['wind_direction_10m'])} ({get_wind_power(cur['wind_speed_10m'], gusts)})\n"
@@ -217,7 +218,7 @@ def main():
                      f"🕒 Световой день: {d_data['sunrise'][i][-5:]} — {d_data['sunset'][i][-5:]}")
             day_blocks.append(block)
 
-        strat_ai = ask_ai_cascade(f"Future: {day_blocks}, History_Vect: {past_72h}", f"Ты —  метеоролог-профи на телевидении.Проанализируй массив данных и на их основе расскажи телезрителям какая погода их ждёт ближайшие 3 дня и почему. {common_rules}")
+        strat_ai = ask_ai_cascade(f"Future: {day_blocks}, History_Vect: {past_72h}", f"Ты — метеоролог-профи на телевидении.Проанализируй массив данных и на их основе расскажи телезрителям какая погода их ждёт ближайшие 3 дня и почему. {common_rules}")
         final_strat = "🗓 #прогноз3дня\n🔭 **Прогноз на 3 дня**\n\n" + "\n\n".join(day_blocks) + f"\n\n🏛 **Аналитика:**\n{strat_ai}"
         requests.post(f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage", json={"chat_id": CH_ID, "text": final_strat, "parse_mode": "Markdown"})
 
