@@ -138,7 +138,7 @@ def ask_ai_cascade(prompt_msg, system_preamble):
             log(f"🧠 [AI] Запрос: {name}...")
 
             if m_type == "gemini":
-                url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={key}"
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key={key}"
                 payload = {"contents": [{"parts": [{"text": f"{system_preamble}\n\nДАННЫЕ:\n{prompt_msg}"}]}]}
                 res = requests.post(url, json=payload, timeout=40)
                 if res.status_code == 200:
