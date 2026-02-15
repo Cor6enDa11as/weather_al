@@ -62,7 +62,7 @@ def get_precip_detailed(h_data, start_idx, hours_to_scan):
     return "без осадков"
 
 def get_geo_detailed(target_date=None):
-    """Получает прогноз магнитных бурь напрямую от NOAA на конкретную дату"""
+    """ИСПРАВЛЕНО: Прямое получение G и числа. Защита от ошибок парсинга строк."""
     try:
         url = "https://services.swpc.noaa.gov/products/noaa-scales.json"
         res = requests.get(url, timeout=10).json()
@@ -71,11 +71,15 @@ def get_geo_detailed(target_date=None):
             target_date = (datetime.datetime.utcnow() + datetime.timedelta(hours=3)).strftime('%Y-%m-%d')
 
         max_g = 0
-        for entry in res:
-            if entry.get('DateStamp') == target_date:
-                g_val = int(entry.get('G', {}).get('Scale', 0))
-                if g_val > max_g:
-                    max_g = g_val
+        if isinstance(res, list):
+            for entry in res:
+                if isinstance(entry, dict) and entry.get('DateStamp') == target_date:
+                    g_info = entry.get('G')
+                    if isinstance(g_info, dict):
+                        try:
+                            val = int(g_info.get('Scale', 0))
+                            if val > max_g: max_g = val
+                        except: continue
 
         desc = get_g_desc(max_g)
         return f"G{max_g} {desc}", max_g
@@ -238,8 +242,6 @@ def main():
             p_detailed = get_precip_detailed(h_data, idx, 24)
             p_mm_day = int(h_data['surface_pressure'][mid] * 0.750062)
             geo_day, _ = get_geo_detailed(target_dt.strftime('%Y-%m-%d'))
-
-            # ИСПРАВЛЕНИЕ: передаем реальную минимальную температуру дня вместо "15"
             day_temp_min = d_data['temperature_2m_min'][i]
 
             block = (f"📅 **{d_name}**\n"
