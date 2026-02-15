@@ -41,7 +41,6 @@ def get_weather_desc(code):
     return codes.get(code, "осадки")
 
 def get_precip_detailed(h_data, start_idx, hours_to_scan):
-    """Определяет тип осадков и временное окно"""
     start_h, end_h, p_type = None, None, "без осадков"
     max_prob = 0
     for i in range(start_idx, start_idx + hours_to_scan):
@@ -62,7 +61,7 @@ def get_precip_detailed(h_data, start_idx, hours_to_scan):
     return "без осадков"
 
 def get_geo_detailed(target_date=None):
-    """ИСПРАВЛЕНО: Прямое получение G и числа. Защита от ошибок парсинга строк."""
+    """ИСПРАВЛЕНО: Теперь корректно читает словарь NOAA и выводит G-индекс"""
     try:
         url = "https://services.swpc.noaa.gov/products/noaa-scales.json"
         res = requests.get(url, timeout=10).json()
@@ -71,15 +70,17 @@ def get_geo_detailed(target_date=None):
             target_date = (datetime.datetime.utcnow() + datetime.timedelta(hours=3)).strftime('%Y-%m-%d')
 
         max_g = 0
-        if isinstance(res, list):
-            for entry in res:
+        if isinstance(res, dict):
+            for entry in res.values():
                 if isinstance(entry, dict) and entry.get('DateStamp') == target_date:
                     g_info = entry.get('G')
                     if isinstance(g_info, dict):
-                        try:
-                            val = int(g_info.get('Scale', 0))
-                            if val > max_g: max_g = val
-                        except: continue
+                        val = g_info.get('Scale')
+                        if val is not None:
+                            try:
+                                val_int = int(val)
+                                if val_int > max_g: max_g = val_int
+                            except: continue
 
         desc = get_g_desc(max_g)
         return f"G{max_g} {desc}", max_g
@@ -95,7 +96,7 @@ def get_pressure_desc(p):
 def get_g_desc(g_scale):
     try:
         g = int(g_scale)
-        if g == 0: return "(спокойно)"
+        if g == 0: return "(спокойно ✨)"
         if g == 1: return "(слабая буря 🟡)"
         if g == 2: return "(умеренная буря 🟠)"
         if g >= 3: return "(СИЛЬНЫЙ ШТОРМ 🚨)"
@@ -124,46 +125,44 @@ def get_visibility_desc(v_m):
     if v_km < 4: return f"{v_km} км (дымка 🌫)"
     return f"{v_km} км (чисто ✨)"
 
-# --- Каскад ИИ ---
+# --- Каскад ИИ (Исправлено: Приоритет Gemini, чистые логи) ---
 def ask_ai_cascade(prompt_msg, system_preamble):
-    if GEMINI_KEY:
-        log("🧠 [AI LOG] Запрос к Gemini 3 Flash...")
-        try:
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_KEY}"
-            payload = {"contents": [{"parts": [{"text": f"{system_preamble}\n\nДАННЫЕ:\n{prompt_msg}"}]}]}
-            res = requests.post(url, json=payload, timeout=90)
-            if res.status_code == 200: return res.json()['candidates'][0]['content']['parts'][0]['text'].strip()
-        except Exception as e: log(f"⚠️ Gemini error: {e}")
+    models = [
+        ("Gemini", "gemini"),
+        ("Cohere", "cohere"),
+        ("Mistral", "mistral"),
+        ("Groq", "groq")
+    ]
 
-    if COHERE_KEY:
-        log("🧠 [AI LOG] Переключение на Cohere...")
-        try:
-            res = requests.post("https://api.cohere.ai/v1/chat",
-                                headers={"Authorization": f"Bearer {COHERE_KEY}"},
-                                json={"message": prompt_msg, "model": "command-r-plus-08-2024", "preamble": system_preamble},
-                                timeout=60)
-            if res.status_code == 200: return res.json().get('text', '').strip()
-        except Exception as e: log(f"⚠️ Cohere error: {e}")
+    for name, m_type in models:
+        key = globals().get(f"{name.upper()}_KEY")
+        if not key: continue
 
-    if MISTRAL_KEY:
-        log("🧠 [AI LOG] Переключение на Mistral...")
         try:
-            res = requests.post("https://api.mistral.ai/v1/chat/completions",
-                                headers={"Authorization": f"Bearer {MISTRAL_KEY}"},
-                                json={"model": "mistral-large-latest", "messages": [{"role": "system", "content": system_preamble}, {"role": "user", "content": prompt_msg}]},
-                                timeout=45)
-            if res.status_code == 200: return res.json()['choices'][0]['message']['content'].strip()
-        except Exception as e: log(f"⚠️ Mistral error: {e}")
+            log(f"🧠 [AI] Запрос: {name}")
+            if m_type == "gemini":
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={key}"
+                payload = {"contents": [{"parts": [{"text": f"{system_preamble}\n\nДАННЫЕ:\n{prompt_msg}"}]}]}
+                res = requests.post(url, json=payload, timeout=40)
+                if res.status_code == 200: return res.json()['candidates'][0]['content']['parts'][0]['text'].strip()
 
-    if GROQ_KEY:
-        log("🧠 [AI LOG] Переключение на Groq...")
-        try:
-            res = requests.post("https://api.groq.com/openai/v1/chat/completions",
-                                headers={"Authorization": f"Bearer {GROQ_KEY}"},
-                                json={"model": "llama-3.3-70b-versatile", "messages": [{"role": "system", "content": system_preamble}, {"role": "user", "content": prompt_msg}]},
-                                timeout=30)
-            if res.status_code == 200: return res.json()['choices'][0]['message']['content'].strip()
-        except Exception as e: log(f"⚠️ Groq error: {e}")
+            elif m_type == "cohere":
+                res = requests.post("https://api.cohere.ai/v1/chat", headers={"Authorization": f"Bearer {key}"},
+                                    json={"message": prompt_msg, "model": "command-r-plus-08-2024", "preamble": system_preamble}, timeout=40)
+                if res.status_code == 200: return res.json().get('text', '').strip()
+
+            elif m_type == "mistral":
+                res = requests.post("https://api.mistral.ai/v1/chat/completions", headers={"Authorization": f"Bearer {key}"},
+                                    json={"model": "mistral-large-latest", "messages": [{"role": "system", "content": system_preamble}, {"role": "user", "content": prompt_msg}]}, timeout=30)
+                if res.status_code == 200: return res.json()['choices'][0]['message']['content'].strip()
+
+            elif m_type == "groq":
+                res = requests.post("https://api.groq.com/openai/v1/chat/completions", headers={"Authorization": f"Bearer {key}"},
+                                    json={"model": "llama-3.3-70b-versatile", "messages": [{"role": "system", "content": system_preamble}, {"role": "user", "content": prompt_msg}]}, timeout=30)
+                if res.status_code == 200: return res.json()['choices'][0]['message']['content'].strip()
+        except Exception as e:
+            log(f"⚠️ [AI] {name} fail: {str(e)[:40]}")
+            continue
 
     return "Аналитика сейчас недоступна."
 
@@ -200,6 +199,7 @@ def main():
     precip_info = get_precip_detailed(h_data, idx_now, 24)
     common_rules = "Запрещено: «вероятно», «возможно», «может быть»,приветствие..3-4 предложения без цифр."
     ai_text, tag, label, preamble = "", "🌤️", "#прогноздень", None
+
     if 5 <= hour < 14:
         tag, label = "🌅", "#прогнозутро"
         preamble = f"Ты — метеоролог-профи на телевидении.Проанализируй массив данных и на их основе расскажи своим телезрителям какая сегодня будет погода и почему. {common_rules}"
