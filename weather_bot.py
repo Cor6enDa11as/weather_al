@@ -61,14 +61,11 @@ def get_precip_detailed(h_data, start_idx, hours_to_scan):
     return "без осадков"
 
 def get_geo_detailed(target_date=None):
-    """ИСПРАВЛЕНО: Теперь корректно читает словарь NOAA и выводит G-индекс"""
     try:
         url = "https://services.swpc.noaa.gov/products/noaa-scales.json"
         res = requests.get(url, timeout=10).json()
-
         if not target_date:
             target_date = (datetime.datetime.utcnow() + datetime.timedelta(hours=3)).strftime('%Y-%m-%d')
-
         max_g = 0
         if isinstance(res, dict):
             for entry in res.values():
@@ -81,7 +78,6 @@ def get_geo_detailed(target_date=None):
                                 val_int = int(val)
                                 if val_int > max_g: max_g = val_int
                             except: continue
-
         desc = get_g_desc(max_g)
         return f"G{max_g} {desc}", max_g
     except Exception as e:
@@ -125,7 +121,7 @@ def get_visibility_desc(v_m):
     if v_km < 4: return f"{v_km} км (дымка 🌫)"
     return f"{v_km} км (чисто ✨)"
 
-# --- Каскад ИИ (Исправлено: Приоритет Gemini, чистые логи) ---
+# --- ИСПРАВЛЕННЫЙ КАСКАД ИИ ---
 def ask_ai_cascade(prompt_msg, system_preamble):
     models = [
         ("Gemini", "gemini"),
@@ -133,11 +129,9 @@ def ask_ai_cascade(prompt_msg, system_preamble):
         ("Mistral", "mistral"),
         ("Groq", "groq")
     ]
-
     for name, m_type in models:
         key = globals().get(f"{name.upper()}_KEY")
         if not key: continue
-
         try:
             log(f"🧠 [AI] Запрос: {name}")
             if m_type == "gemini":
@@ -145,17 +139,14 @@ def ask_ai_cascade(prompt_msg, system_preamble):
                 payload = {"contents": [{"parts": [{"text": f"{system_preamble}\n\nДАННЫЕ:\n{prompt_msg}"}]}]}
                 res = requests.post(url, json=payload, timeout=40)
                 if res.status_code == 200: return res.json()['candidates'][0]['content']['parts'][0]['text'].strip()
-
             elif m_type == "cohere":
                 res = requests.post("https://api.cohere.ai/v1/chat", headers={"Authorization": f"Bearer {key}"},
                                     json={"message": prompt_msg, "model": "command-r-plus-08-2024", "preamble": system_preamble}, timeout=40)
                 if res.status_code == 200: return res.json().get('text', '').strip()
-
             elif m_type == "mistral":
                 res = requests.post("https://api.mistral.ai/v1/chat/completions", headers={"Authorization": f"Bearer {key}"},
                                     json={"model": "mistral-large-latest", "messages": [{"role": "system", "content": system_preamble}, {"role": "user", "content": prompt_msg}]}, timeout=30)
                 if res.status_code == 200: return res.json()['choices'][0]['message']['content'].strip()
-
             elif m_type == "groq":
                 res = requests.post("https://api.groq.com/openai/v1/chat/completions", headers={"Authorization": f"Bearer {key}"},
                                     json={"model": "llama-3.3-70b-versatile", "messages": [{"role": "system", "content": system_preamble}, {"role": "user", "content": prompt_msg}]}, timeout=30)
@@ -163,7 +154,6 @@ def ask_ai_cascade(prompt_msg, system_preamble):
         except Exception as e:
             log(f"⚠️ [AI] {name} fail: {str(e)[:40]}")
             continue
-
     return "Аналитика сейчас недоступна."
 
 def main():
@@ -244,11 +234,14 @@ def main():
             geo_day, _ = get_geo_detailed(target_dt.strftime('%Y-%m-%d'))
             day_temp_min = d_data['temperature_2m_min'][i]
 
+            # Добавлено пояснение силы ветра для 3-х дневной сводки
+            wind_p_desc = get_wind_power(d_data['wind_speed_10m_max'][i], d_data['wind_gusts_10m_max'][i])
+
             block = (f"📅 **{d_name}**\n"
                      f"🌡 Температура: {day_temp_min}..{d_data['temperature_2m_max'][i]}°C\n"
                      f"☁️ Облачность: {h_data['cloud_cover'][mid]}% ({get_weather_desc(h_data['weather_code'][mid])})\n"
                      f"🌧 Осадки: {p_detailed}\n"
-                     f"💨 Ветер: {d_data['wind_speed_10m_max'][i]} км/ч (порывы {d_data['wind_gusts_10m_max'][i]} км/ч) {get_wind_dir(h_data['wind_direction_10m'][mid])}\n"
+                     f"💨 Ветер: {d_data['wind_speed_10m_max'][i]} км/ч (порывы {d_data['wind_gusts_10m_max'][i]} км/ч) {get_wind_dir(h_data['wind_direction_10m'][mid])} ({wind_p_desc})\n"
                      f"💧 Влажность: {h_data['relative_humidity_2m'][mid]}% {get_humidity_desc(h_data['relative_humidity_2m'][mid], day_temp_min)}\n"
                      f"📈 Давление: {p_mm_day} мм {get_pressure_desc(p_mm_day)}\n"
                      f"🧲 Магнитный фон: {geo_day}\n"
