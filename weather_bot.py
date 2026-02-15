@@ -61,31 +61,30 @@ def get_precip_detailed(h_data, start_idx, hours_to_scan):
         return f"{p_type} ({max_prob}%) {start_h%24:02d}:00 — {(end_h+1)%24:02d}:00"
     return "без осадков"
 
-def get_geo_detailed(lat, lon, start_idx=72, hours=24):
-    """Получает детальный прогноз магнитных бурь с интервалами"""
+def get_geo_detailed(target_date=None):
+    """Получает прогноз магнитных бурь напрямую от NOAA на конкретную дату"""
     try:
-        url = f"https://ensemble-api.open-meteo.com/v1/ensemble?latitude={lat}&longitude={lon}&hourly=kp_index&timezone=auto"
+        # Прямая ссылка на NOAA JSON, которую мы проверили
+        url = "https://services.swpc.noaa.gov/products/noaa-scales.json"
         res = requests.get(url, timeout=10).json()
-        kp_list = res['hourly']['kp_index']
 
-        max_kp = 0
-        start_h, end_h = None, None
+        # Если дата не передана, берем текущую (Пинск +3)
+        if not target_date:
+            target_date = (datetime.datetime.utcnow() + datetime.timedelta(hours=3)).strftime('%Y-%m-%d')
 
-        for i in range(start_idx, start_idx + hours):
-            kp = kp_list[i]
-            if kp > max_kp: max_kp = kp
-            if kp >= 4: # Порог G1
-                if start_h is None: start_h = i
-                end_h = i
+        max_g = 0
+        # Проходим по всем блокам прогноза NOAA (обычно их 3-4)
+        for entry in res:
+            if entry.get('DateStamp') == target_date:
+                # Извлекаем значение G Scale
+                g_val = int(entry.get('G', {}).get('Scale', 0))
+                if g_val > max_g:
+                    max_g = g_val
 
-        g_level = 0
-        if max_kp >= 5: g_level = int(max_kp - 4)
-        elif max_kp >= 4: g_level = 1 # Kp 4-5 это G1
-
-        desc = get_g_desc(g_level)
-        time_info = f" ({start_h%24:02d}:00 — {(end_h+1)%24:02d}:00)" if start_h is not None else ""
-        return f"G{g_level} {desc}{time_info}", g_level
-    except:
+        desc = get_g_desc(max_g)
+        return f"G{max_g} {desc}", max_g
+    except Exception as e:
+        log(f"⚠️ NOAA Geo Error: {e}")
         return "G0 (нет данных)", 0
 
 def get_pressure_desc(p):
@@ -131,7 +130,7 @@ def ask_ai_cascade(prompt_msg, system_preamble):
     if GEMINI_KEY:
         log("🧠 [AI LOG] Запрос к Gemini 3 Flash...")
         try:
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key={GEMINI_KEY}"
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_KEY}"
             payload = {"contents": [{"parts": [{"text": f"{system_preamble}\n\nДАННЫЕ:\n{prompt_msg}"}]}]}
             res = requests.post(url, json=payload, timeout=90)
             if res.status_code == 200: return res.json()['candidates'][0]['content']['parts'][0]['text'].strip()
@@ -188,8 +187,8 @@ def main():
 
     past_72h = {"t_delta": round(cur['temperature_2m'] - h_data['temperature_2m'][idx_now - 72], 1), "precip_sum": round(sum(h_data['precipitation'][idx_now-72:idx_now]), 1)}
 
-    # Детальный магнитный фон на сегодня
-    geo_info, g_max = get_geo_detailed(LAT, LON, idx_now, 24)
+    # Детальный магнитный фон на сегодня от NOAA
+    geo_info, g_max = get_geo_detailed()
 
     pm25 = 0.0
     try:
@@ -247,11 +246,15 @@ def main():
         for i in range(4, 7):
             idx = i * 24
             mid = idx + 12
-            d_name = (now + datetime.timedelta(days=i-3)).strftime('%a, %d.%m').replace('Mon','Понедельник').replace('Tue','Вторник').replace('Wed','Среда').replace('Thu','Четверг').replace('Fri','Пятница').replace('Sat','Суббота').replace('Sun','Воскресение')
+
+            target_dt = now + datetime.timedelta(days=i-3)
+            d_name = target_dt.strftime('%a, %d.%m').replace('Mon','Понедельник').replace('Tue','Вторник').replace('Wed','Среда').replace('Thu','Четверг').replace('Fri','Пятница').replace('Sat','Суббота').replace('Sun','Воскресение')
 
             p_detailed = get_precip_detailed(h_data, idx, 24)
             p_mm_day = int(h_data['surface_pressure'][mid] * 0.750062)
-            geo_day, _ = get_geo_detailed(LAT, LON, idx, 24)
+
+            # Получаем магнитный фон именно на эту дату из NOAA
+            geo_day, _ = get_geo_detailed(target_dt.strftime('%Y-%m-%d'))
 
             block = (f"📅 **{d_name}**\n"
                      f"🌡 Температура: {d_data['temperature_2m_min'][i]}..{d_data['temperature_2m_max'][i]}°C\n"
