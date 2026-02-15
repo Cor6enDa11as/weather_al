@@ -64,19 +64,15 @@ def get_precip_detailed(h_data, start_idx, hours_to_scan):
 def get_geo_detailed(target_date=None):
     """Получает прогноз магнитных бурь напрямую от NOAA на конкретную дату"""
     try:
-        # Прямая ссылка на NOAA JSON, которую мы проверили
         url = "https://services.swpc.noaa.gov/products/noaa-scales.json"
         res = requests.get(url, timeout=10).json()
 
-        # Если дата не передана, берем текущую (Пинск +3)
         if not target_date:
             target_date = (datetime.datetime.utcnow() + datetime.timedelta(hours=3)).strftime('%Y-%m-%d')
 
         max_g = 0
-        # Проходим по всем блокам прогноза NOAA (обычно их 3-4)
         for entry in res:
             if entry.get('DateStamp') == target_date:
-                # Извлекаем значение G Scale
                 g_val = int(entry.get('G', {}).get('Scale', 0))
                 if g_val > max_g:
                     max_g = g_val
@@ -126,7 +122,6 @@ def get_visibility_desc(v_m):
 
 # --- Каскад ИИ ---
 def ask_ai_cascade(prompt_msg, system_preamble):
-    # 1. Gemini
     if GEMINI_KEY:
         log("🧠 [AI LOG] Запрос к Gemini 3 Flash...")
         try:
@@ -136,7 +131,6 @@ def ask_ai_cascade(prompt_msg, system_preamble):
             if res.status_code == 200: return res.json()['candidates'][0]['content']['parts'][0]['text'].strip()
         except Exception as e: log(f"⚠️ Gemini error: {e}")
 
-    # 2. Cohere
     if COHERE_KEY:
         log("🧠 [AI LOG] Переключение на Cohere...")
         try:
@@ -147,7 +141,6 @@ def ask_ai_cascade(prompt_msg, system_preamble):
             if res.status_code == 200: return res.json().get('text', '').strip()
         except Exception as e: log(f"⚠️ Cohere error: {e}")
 
-    # 3. Mistral
     if MISTRAL_KEY:
         log("🧠 [AI LOG] Переключение на Mistral...")
         try:
@@ -158,7 +151,6 @@ def ask_ai_cascade(prompt_msg, system_preamble):
             if res.status_code == 200: return res.json()['choices'][0]['message']['content'].strip()
         except Exception as e: log(f"⚠️ Mistral error: {e}")
 
-    # 4. Groq
     if GROQ_KEY:
         log("🧠 [AI LOG] Переключение на Groq...")
         try:
@@ -186,8 +178,6 @@ def main():
     hour, dow, idx_now = now.hour, now.weekday(), 72 + now.hour
 
     past_72h = {"t_delta": round(cur['temperature_2m'] - h_data['temperature_2m'][idx_now - 72], 1), "precip_sum": round(sum(h_data['precipitation'][idx_now-72:idx_now]), 1)}
-
-    # Детальный магнитный фон на сегодня от NOAA
     geo_info, g_max = get_geo_detailed()
 
     pm25 = 0.0
@@ -203,9 +193,7 @@ def main():
     if cur['temperature_2m'] < 1 and h_data['soil_temperature_0cm'][idx_now] < 0 and sum(h_data['precipitation'][idx_now-6:idx_now]) > 0:
         danger_alerts.append("🟠 **ОРАНЖЕВЫЙ УРОВЕНЬ:** Гололедица! ⛸️")
 
-    # Осадки для основной сводки
     precip_info = get_precip_detailed(h_data, idx_now, 24)
-
     common_rules = "Запрещено: «вероятно», «возможно», «может быть»,приветствие..3-4 предложения без цифр."
     ai_text, tag, label, preamble = "", "🌤️", "#прогноздень", None
     if 5 <= hour < 14:
@@ -240,28 +228,26 @@ def main():
 
     requests.post(f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage", json={"chat_id": CH_ID, "text": msg, "parse_mode": "Markdown"})
 
-    # --- СТРАТЕГИЯ НА 3 ДНЯ ---
     if hour >= 20 and dow in [2, 6]:
         day_blocks = []
         for i in range(4, 7):
             idx = i * 24
             mid = idx + 12
-
             target_dt = now + datetime.timedelta(days=i-3)
             d_name = target_dt.strftime('%a, %d.%m').replace('Mon','Понедельник').replace('Tue','Вторник').replace('Wed','Среда').replace('Thu','Четверг').replace('Fri','Пятница').replace('Sat','Суббота').replace('Sun','Воскресение')
-
             p_detailed = get_precip_detailed(h_data, idx, 24)
             p_mm_day = int(h_data['surface_pressure'][mid] * 0.750062)
-
-            # Получаем магнитный фон именно на эту дату из NOAA
             geo_day, _ = get_geo_detailed(target_dt.strftime('%Y-%m-%d'))
 
+            # ИСПРАВЛЕНИЕ: передаем реальную минимальную температуру дня вместо "15"
+            day_temp_min = d_data['temperature_2m_min'][i]
+
             block = (f"📅 **{d_name}**\n"
-                     f"🌡 Температура: {d_data['temperature_2m_min'][i]}..{d_data['temperature_2m_max'][i]}°C\n"
+                     f"🌡 Температура: {day_temp_min}..{d_data['temperature_2m_max'][i]}°C\n"
                      f"☁️ Облачность: {h_data['cloud_cover'][mid]}% ({get_weather_desc(h_data['weather_code'][mid])})\n"
                      f"🌧 Осадки: {p_detailed}\n"
                      f"💨 Ветер: {d_data['wind_speed_10m_max'][i]} км/ч (порывы {d_data['wind_gusts_10m_max'][i]} км/ч) {get_wind_dir(h_data['wind_direction_10m'][mid])}\n"
-                     f"💧 Влажность: {h_data['relative_humidity_2m'][mid]}% {get_humidity_desc(h_data['relative_humidity_2m'][mid], 15)}\n"
+                     f"💧 Влажность: {h_data['relative_humidity_2m'][mid]}% {get_humidity_desc(h_data['relative_humidity_2m'][mid], day_temp_min)}\n"
                      f"📈 Давление: {p_mm_day} мм {get_pressure_desc(p_mm_day)}\n"
                      f"🧲 Магнитный фон: {geo_day}\n"
                      f"✨ Видимость: {get_visibility_desc(h_data['visibility'][mid])}\n"
