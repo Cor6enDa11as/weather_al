@@ -61,6 +61,33 @@ def get_precip_detailed(h_data, start_idx, hours_to_scan):
         return f"{p_type} ({max_prob}%) {start_h%24:02d}:00 — {(end_h+1)%24:02d}:00"
     return "без осадков"
 
+def get_geo_detailed(lat, lon, start_idx=72, hours=24):
+    """Получает детальный прогноз магнитных бурь с интервалами"""
+    try:
+        url = f"https://ensemble-api.open-meteo.com/v1/ensemble?latitude={lat}&longitude={lon}&hourly=kp_index&timezone=auto"
+        res = requests.get(url, timeout=10).json()
+        kp_list = res['hourly']['kp_index']
+
+        max_kp = 0
+        start_h, end_h = None, None
+
+        for i in range(start_idx, start_idx + hours):
+            kp = kp_list[i]
+            if kp > max_kp: max_kp = kp
+            if kp >= 4: # Порог G1
+                if start_h is None: start_h = i
+                end_h = i
+
+        g_level = 0
+        if max_kp >= 5: g_level = int(max_kp - 4)
+        elif max_kp >= 4: g_level = 1 # Kp 4-5 это G1
+
+        desc = get_g_desc(g_level)
+        time_info = f" ({start_h%24:02d}:00 — {(end_h+1)%24:02d}:00)" if start_h is not None else ""
+        return f"G{g_level} {desc}{time_info}", g_level
+    except:
+        return "G0 (нет данных)", 0
+
 def get_pressure_desc(p):
     if p < 745: return "(пониженное 📉)"
     if p > 755: return "(повышенное 📈)"
@@ -161,11 +188,8 @@ def main():
 
     past_72h = {"t_delta": round(cur['temperature_2m'] - h_data['temperature_2m'][idx_now - 72], 1), "precip_sum": round(sum(h_data['precipitation'][idx_now-72:idx_now]), 1)}
 
-    g_now = 0
-    try:
-        g_res = requests.get("https://services.swpc.noaa.gov/products/noaa-scales.json", timeout=10).json()
-        g_now = int(g_res['0']['G']['Scale'])
-    except: pass
+    # Детальный магнитный фон на сегодня
+    geo_info, g_max = get_geo_detailed(LAT, LON, idx_now, 24)
 
     pm25 = 0.0
     try:
@@ -176,7 +200,7 @@ def main():
     danger_alerts = []
     gusts = cur.get('wind_gusts_10m', 0)
     if gusts >= 54: danger_alerts.append(f"🟠 **ОРАНЖЕВЫЙ УРОВЕНЬ:** Ветер {gusts} км/ч!")
-    if g_now >= 2: danger_alerts.append(f"🟠 **ОРАНЖЕВЫЙ УРОВЕНЬ:** Буря Scale G{g_now}!")
+    if g_max >= 2: danger_alerts.append(f"🟠 **ОРАНЖЕВЫЙ УРОВЕНЬ:** Буря Scale G{g_max}!")
     if cur['temperature_2m'] < 1 and h_data['soil_temperature_0cm'][idx_now] < 0 and sum(h_data['precipitation'][idx_now-6:idx_now]) > 0:
         danger_alerts.append("🟠 **ОРАНЖЕВЫЙ УРОВЕНЬ:** Гололедица! ⛸️")
 
@@ -193,7 +217,7 @@ def main():
         preamble = f"Ты — метеоролог-профи на телевидении.Проанализируй массив данных и на их основе расскажи телезрителям какая погода будет ночью и ранним утром и почему {common_rules}"
 
     if preamble:
-        ai_payload = f"PAST: {past_72h} | CUR: T={cur['temperature_2m']}, Soil={h_data['soil_temperature_0cm'][idx_now]}, G={g_now}"
+        ai_payload = f"PAST: {past_72h} | CUR: T={cur['temperature_2m']}, Soil={h_data['soil_temperature_0cm'][idx_now]}, G={g_max}"
         ai_text = ask_ai_cascade(ai_payload, preamble)
 
     press_mm = int(cur['surface_pressure'] * 0.750062)
@@ -208,7 +232,7 @@ def main():
            f"💨 Ветер: {cur['wind_speed_10m']} км/ч (порывы {gusts} км/ч) {get_wind_dir(cur['wind_direction_10m'])} ({get_wind_power(cur['wind_speed_10m'], gusts)})\n"
            f"💧 Влажность: {cur['relative_humidity_2m']}% {get_humidity_desc(cur['relative_humidity_2m'], cur['temperature_2m'])}\n"
            f"📈 Давление: {press_mm} мм {get_pressure_desc(press_mm)}\n"
-           f"🧲 Магнитный фон: G{g_now} {get_g_desc(g_now)}\n"
+           f"🧲 Магнитный фон: {geo_info}\n"
            f"☀️ УФ-индекс: {cur['uv_index']} {get_uv_desc(cur['uv_index'])}\n"
            f"✨ Видимость: {get_visibility_desc(cur['visibility'])}\n"
            f"🕒 Световой день: {d_data['sunrise'][3][-5:]} — {d_data['sunset'][3][-5:]}\n"
@@ -223,10 +247,11 @@ def main():
         for i in range(4, 7):
             idx = i * 24
             mid = idx + 12
-            d_name = (now + datetime.timedelta(days=i-3)).strftime('%a, %d.%m').replace('Mon','Пн').replace('Tue','Вт').replace('Wed','Ср').replace('Thu','Чт').replace('Fri','Пт').replace('Sat','Сб').replace('Sun','Вс')
+            d_name = (now + datetime.timedelta(days=i-3)).strftime('%a, %d.%m').replace('Mon','Понедельник').replace('Tue','Вторник').replace('Wed','Среда').replace('Thu','Четверг').replace('Fri','Пятница').replace('Sat','Суббота').replace('Sun','Воскресение')
 
             p_detailed = get_precip_detailed(h_data, idx, 24)
             p_mm_day = int(h_data['surface_pressure'][mid] * 0.750062)
+            geo_day, _ = get_geo_detailed(LAT, LON, idx, 24)
 
             block = (f"📅 **{d_name}**\n"
                      f"🌡 Температура: {d_data['temperature_2m_min'][i]}..{d_data['temperature_2m_max'][i]}°C\n"
@@ -235,11 +260,12 @@ def main():
                      f"💨 Ветер: {d_data['wind_speed_10m_max'][i]} км/ч (порывы {d_data['wind_gusts_10m_max'][i]} км/ч) {get_wind_dir(h_data['wind_direction_10m'][mid])}\n"
                      f"💧 Влажность: {h_data['relative_humidity_2m'][mid]}% {get_humidity_desc(h_data['relative_humidity_2m'][mid], 15)}\n"
                      f"📈 Давление: {p_mm_day} мм {get_pressure_desc(p_mm_day)}\n"
+                     f"🧲 Магнитный фон: {geo_day}\n"
                      f"✨ Видимость: {get_visibility_desc(h_data['visibility'][mid])}\n"
                      f"🕒 Световой день: {d_data['sunrise'][i][-5:]} — {d_data['sunset'][i][-5:]}")
             day_blocks.append(block)
 
-        strat_preamble = f"Ты — метеоролог-профи на телевидении.Проанализируй массив данных и на их основе расскажи телезрителям какая погода их ждёт ближайшие 3 дня и почему. {common_rules}"
+        strat_preamble = f"Ты — метеоролог-профи на телевидении.Проанализируй массив данных и на их основе расскажи телезрителям какая погода их ждёт ближайшие 3 дня(подробно по дням) и почему. {common_rules}"
         strat_ai = ask_ai_cascade(f"Future: {day_blocks}", strat_preamble)
         final_strat = "🗓 #прогноз3дня\n🔭 **Прогноз на 3 дня**\n\n" + "\n\n".join(day_blocks) + f"\n\n🏛 **Аналитика:**\n{strat_ai}"
         requests.post(f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage", json={"chat_id": CH_ID, "text": final_strat, "parse_mode": "Markdown"})
